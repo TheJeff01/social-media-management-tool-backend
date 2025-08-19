@@ -10,6 +10,8 @@ const PORT = process.env.PORT || 3001;
 const authRoutes = require('./routes/auth');
 const twitterRoutes = require('./routes/twitter');
 const linkedinRoutes = require('./routes/linkedin');
+const facebookRoutes = require('./routes/facebook');
+const postingRoutes = require('./routes/posting');
 
 // Import middleware
 const corsMiddleware = require('./middleware/cors');
@@ -26,6 +28,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/auth', authRoutes);
 app.use('/auth/twitter', twitterRoutes);
 app.use('/auth/linkedin', linkedinRoutes);
+app.use('/auth/facebook', facebookRoutes);
+app.use('/api/posting', postingRoutes);
 
 // Health check endpoint
 app.get('/', (req, res) => {
@@ -35,6 +39,8 @@ app.get('/', (req, res) => {
     endpoints: {
       twitter: '/auth/twitter',
       linkedin: '/auth/linkedin',
+      facebook: '/auth/facebook',
+      posting: '/api/posting',
       health: '/'
     }
   });
@@ -59,4 +65,5 @@ app.listen(PORT, () => {
   console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL}`);
   console.log(`🐦 Twitter OAuth: http://localhost:${PORT}/auth/twitter`);
   console.log(`💼 LinkedIn OAuth: http://localhost:${PORT}/auth/linkedin`);
+  console.log(`📘 Facebook OAuth: http://localhost:${PORT}/auth/facebook`);
 });

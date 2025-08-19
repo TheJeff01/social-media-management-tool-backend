@@ -6,7 +6,7 @@ router.get('/status', (req, res) => {
   res.json({ 
     status: 'Auth service is running',
     timestamp: new Date().toISOString(),
-    availableProviders: ['twitter', 'linkedin']
+    availableProviders: ['twitter', 'linkedin', 'facebook']
   });
 });
 

@@ -1,4 +1,3 @@
-
 // ===============================
 // config/oauth.js
 // ===============================
@@ -20,5 +19,14 @@ module.exports = {
     tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
     userUrl: 'https://api.linkedin.com/v2/people/~',
     scope: 'r_liteprofile r_emailaddress w_member_social'
+  },
+  facebook: {
+    clientId: process.env.FACEBOOK_APP_ID,
+    clientSecret: process.env.FACEBOOK_APP_SECRET,
+    redirectUri: process.env.FACEBOOK_REDIRECT_URI,
+    authUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
+    tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
+    userUrl: 'https://graph.facebook.com/v18.0/me',
+    scope: 'pages_manage_posts,pages_show_list,pages_read_engagement,public_profile'
   }
 };
