@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twitter Authentication</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #1DA1F2, #14171A);
+            color: white;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .success { color: #10b981; }
+        .error { color: #ef4444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner" id="spinner"></div>
+        <h2 id="title">Connecting your Twitter account...</h2>
+        <p id="message">Please wait while we complete the authentication process.</p>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const sessionId = urlParams.get('session');
+        const success = urlParams.get('success');
+        const error = urlParams.get('error');
+
+        const spinner = document.getElementById('spinner');
+        const title = document.getElementById('title');
+        const message = document.getElementById('message');
+
+        // Function to get the frontend origin (where the popup was opened from)
+        function getFrontendOrigin() {
+            // Try common frontend development ports
+            const commonOrigins = [
+                'http://localhost:5173',  // Vite default
+                'http://localhost:3000',  // CRA default
+                'http://127.0.0.1:5173',
+                'http://127.0.0.1:3000'
+            ];
+
+            // If we have window.opener, we can try to get its origin
+            if (window.opener) {
+                try {
+                    // This might work if same origin policy allows it
+                    return window.opener.location.origin;
+                } catch (e) {
+                    // Cross-origin, so we can't access it directly
+                    console.log('Cannot access opener origin directly, using fallback');
+                }
+            }
+
+            // Fallback to most common frontend port
+            return 'http://localhost:5173';
+        }
+
+        const frontendOrigin = getFrontendOrigin();
+        console.log('Using frontend origin:', frontendOrigin);
+
+        function sendMessageToParent(data) {
+            if (window.opener && !window.opener.closed) {
+                console.log('Sending message to parent:', data);
+                window.opener.postMessage(data, frontendOrigin);
+            }
+        }
+
+        if (error) {
+            console.error('Twitter OAuth error:', error);
+            spinner.style.display = 'none';
+            title.textContent = 'Authentication Failed';
+            title.className = 'error';
+            message.textContent = `Error: ${error}`;
+            
+            sendMessageToParent({
+                platform: 'twitter',
+                error: error
+            });
+            
+            setTimeout(() => window.close(), 3000);
+            
+        } else if (success && sessionId) {
+            console.log('Twitter OAuth successful, session:', sessionId);
+            spinner.style.display = 'none';
+            title.textContent = '✅ Twitter Connected!';
+            title.className = 'success';
+            message.textContent = 'Your Twitter account has been successfully connected.';
+            
+            sendMessageToParent({
+                platform: 'twitter',
+                success: true,
+                sessionId: sessionId
+            });
+            
+            setTimeout(() => window.close(), 2000);
+            
+        } else {
+            console.error('No session or error received from Twitter');
+            spinner.style.display = 'none';
+            title.textContent = 'Authentication Failed';
+            title.className = 'error';
+            message.textContent = 'No authentication data received.';
+            
+            sendMessageToParent({
+                platform: 'twitter',
+                error: 'no_session_received'
+            });
+            
+            setTimeout(() => window.close(), 3000);
+        }
+    </script>
+</body>
+</html>
