@@ -223,50 +223,106 @@ router.post('/linkedin', upload.single('image'), async (req, res) => {
 });
 
 // --------------------
-// MULTI-PLATFORM ROUTE
+// MULTI-PLATFORM ROUTE - FIXED
 // --------------------
 router.post('/multi', upload.single('image'), async (req, res) => {
   try {
+    console.log('📤 Multi-platform request received:', {
+      body: req.body,
+      hasFile: !!req.file
+    });
+
     const { content, platforms, credentials, imageUrl } = req.body;
     const imageFile = req.file;
 
-    if (!Array.isArray(platforms) || platforms.length === 0) {
-      return res.status(400).json({ error: 'Platforms array required' });
+    // Parse JSON strings back to objects/arrays
+    let parsedPlatforms;
+    let parsedCredentials;
+
+    try {
+      parsedPlatforms = typeof platforms === 'string' ? JSON.parse(platforms) : platforms;
+      parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
+    } catch (parseError) {
+      console.error('❌ JSON parsing error:', parseError);
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid JSON data in request',
+        details: parseError.message 
+      });
     }
 
-    const postPromises = platforms.map(async (platform) => {
+    console.log('📋 Parsed data:', {
+      platforms: parsedPlatforms,
+      credentials: Object.keys(parsedCredentials || {})
+    });
+
+    if (!Array.isArray(parsedPlatforms) || parsedPlatforms.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Platforms array required',
+        received: parsedPlatforms
+      });
+    }
+
+    if (!parsedCredentials || typeof parsedCredentials !== 'object') {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Credentials object required',
+        received: parsedCredentials
+      });
+    }
+
+    const postPromises = parsedPlatforms.map(async (platform) => {
+      console.log(`🚀 Posting to ${platform}...`);
+      
       try {
         let result;
         switch (platform.toLowerCase()) {
           case 'twitter':
+            if (!parsedCredentials.twitter?.accessToken) {
+              throw new Error('Twitter credentials not found');
+            }
             result = await postToTwitter({
               content,
-              accessToken: credentials.twitter.accessToken,
+              accessToken: parsedCredentials.twitter.accessToken,
               imageFile,
               imageUrl
             });
             break;
+            
           case 'facebook':
+            if (!parsedCredentials.facebook?.pageId || !parsedCredentials.facebook?.pageToken) {
+              throw new Error('Facebook credentials not found');
+            }
             result = await postToFacebook({
               content,
-              pageId: credentials.facebook.pageId,
-              pageToken: credentials.facebook.pageToken,
+              pageId: parsedCredentials.facebook.pageId,
+              pageToken: parsedCredentials.facebook.pageToken,
               imageFile,
               imageUrl
             });
             break;
+            
           case 'linkedin':
+            if (!parsedCredentials.linkedin?.accessToken || !parsedCredentials.linkedin?.userId) {
+              throw new Error('LinkedIn credentials not found');
+            }
             result = await postToLinkedIn({
               content,
-              accessToken: credentials.linkedin.accessToken,
-              userId: credentials.linkedin.userId
+              accessToken: parsedCredentials.linkedin.accessToken,
+              userId: parsedCredentials.linkedin.userId
             });
             break;
+            
           default:
             throw new Error(`${platform} posting not implemented yet`);
         }
+        
+        console.log(`✅ ${platform} posted successfully:`, result.postId);
         return { platform, success: true, result };
+        
       } catch (err) {
+        console.error(`❌ ${platform} posting failed:`, err.message);
         return { platform, success: false, error: err.message };
       }
     });
@@ -275,18 +331,30 @@ router.post('/multi', upload.single('image'), async (req, res) => {
     const successful = results.filter(r => r.success);
     const failed = results.filter(r => !r.success);
 
+    console.log('📊 Multi-platform results:', {
+      total: parsedPlatforms.length,
+      successful: successful.length,
+      failed: failed.length
+    });
+
     res.json({
       success: successful.length > 0,
-      totalPlatforms: platforms.length,
+      totalPlatforms: parsedPlatforms.length,
       successful: successful.length,
       failed: failed.length,
       results,
-      message: successful.length === platforms.length
-        ? `Successfully posted to all ${platforms.length} platforms!`
-        : `Posted to ${successful.length} out of ${platforms.length} platforms`
+      message: successful.length === parsedPlatforms.length
+        ? `Successfully posted to all ${parsedPlatforms.length} platforms!`
+        : `Posted to ${successful.length} out of ${parsedPlatforms.length} platforms`
     });
+
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error('❌ Multi-platform posting error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
