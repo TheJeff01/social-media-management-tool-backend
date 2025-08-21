@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
@@ -11,6 +12,7 @@ const authRoutes = require('./routes/auth');
 const twitterRoutes = require('./routes/twitter');
 const linkedinRoutes = require('./routes/linkedin');
 const facebookRoutes = require('./routes/facebook');
+const instagramRoutes = require('./routes/instagram');
 const postingRoutes = require('./routes/posting');
 
 // Import middleware
@@ -29,6 +31,7 @@ app.use('/auth', authRoutes);
 app.use('/auth/twitter', twitterRoutes);
 app.use('/auth/linkedin', linkedinRoutes);
 app.use('/auth/facebook', facebookRoutes);
+app.use('/auth/instagram', instagramRoutes);
 app.use('/api/posting', postingRoutes);
 
 // Health check endpoint
@@ -39,12 +42,14 @@ app.get('/', (req, res) => {
     endpoints: {
       twitter: '/auth/twitter',
       linkedin: '/auth/linkedin',
+      instagram: '/auth/instagram',
       facebook: '/auth/facebook',
       posting: '/api/posting',
       health: '/'
     }
   });
 });
+
 
 // Error handling middleware
 app.use((err, req, res, next) => {

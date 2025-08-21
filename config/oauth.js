@@ -18,7 +18,7 @@ module.exports = {
     authUrl: 'https://www.linkedin.com/oauth/v2/authorization',
     tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
     userUrl: 'https://api.linkedin.com/v2/people/~',
-    scope: 'r_liteprofile r_emailaddress w_member_social'
+    scope: 'openid profile email w_member_social'
   },
   facebook: {
     clientId: process.env.FACEBOOK_APP_ID,
@@ -28,5 +28,14 @@ module.exports = {
     tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
     userUrl: 'https://graph.facebook.com/v18.0/me',
     scope: 'pages_manage_posts,pages_show_list,pages_read_engagement,public_profile'
+  },
+   instagram: {
+    clientId: process.env.INSTAGRAM_CLIENT_ID,
+    clientSecret: process.env.INSTAGRAM_CLIENT_SECRET,
+    redirectUri: process.env.INSTAGRAM_REDIRECT_URI,
+    authUrl: 'https://api.instagram.com/oauth/authorize',
+    tokenUrl: 'https://api.instagram.com/oauth/access_token',
+    userUrl: 'https://graph.instagram.com/me',
+    scope: 'user_profile,user_media'
   }
 };
