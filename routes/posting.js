@@ -4,10 +4,10 @@ const multer = require('multer');
 const FormData = require('form-data');
 const router = express.Router();
 
-// Configure multer for file uploads
+// Configure multer for multiple file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB per file
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) cb(null, true);
     else cb(new Error('Only image files are allowed'), false);
@@ -15,7 +15,7 @@ const upload = multer({
 });
 
 // --------------------
-// LINKEDIN HELPERS - FIXED FOR IMAGES
+// LINKEDIN HELPERS - UPDATED FOR MULTIPLE IMAGES
 // --------------------
 async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
   console.log('💼 Starting LinkedIn media upload...');
@@ -69,11 +69,6 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
     throw new Error('Empty image buffer for LinkedIn');
   }
 
-  // LinkedIn media upload is a 3-step process:
-  // 1. Initialize upload
-  // 2. Upload binary data
-  // 3. Finalize upload
-
   try {
     // Step 1: Initialize the upload
     console.log('📤 Step 1: Initializing LinkedIn media upload...');
@@ -124,8 +119,8 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
           'Content-Type': 'application/octet-stream',
           'Authorization': `Bearer ${accessToken}`
         },
-        timeout: 60000, // Longer timeout for upload
-        maxContentLength: 10 * 1024 * 1024 // 10MB max
+        timeout: 60000,
+        maxContentLength: 10 * 1024 * 1024
       }
     );
 
@@ -134,8 +129,6 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
     }
 
     console.log('✅ LinkedIn binary upload successful');
-
-    // Step 3: The asset is automatically finalized, so we return the asset URN
     return asset;
 
   } catch (uploadError) {
@@ -155,11 +148,11 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
   }
 }
 
-async function postToLinkedIn({ content, accessToken, userId, imageFile, imageUrl }) {
+async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], imageUrls = [] }) {
   console.log('💼 Starting LinkedIn post:', {
     hasContent: !!content,
-    hasImageFile: !!imageFile,
-    hasImageUrl: !!imageUrl && imageUrl.trim(),
+    imageFileCount: imageFiles.length,
+    imageUrlCount: imageUrls.length,
     contentLength: content?.length || 0
   });
 
@@ -167,21 +160,31 @@ async function postToLinkedIn({ content, accessToken, userId, imageFile, imageUr
     throw new Error('LinkedIn access token and user ID are required');
   }
 
-  if (!content && !imageFile && !imageUrl) {
-    throw new Error('Either content or image is required for LinkedIn posts');
+  if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
+    throw new Error('Either content or images are required for LinkedIn posts');
   }
 
-  let mediaAsset = null;
+  let mediaAssets = [];
   
-  // Upload media if provided
-  if (imageFile || (imageUrl && imageUrl.trim())) {
+  // Upload files
+  for (let i = 0; i < imageFiles.length; i++) {
     try {
-      mediaAsset = await uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId);
-      console.log('📎 LinkedIn media uploaded successfully, asset:', mediaAsset);
+      const asset = await uploadLinkedInMedia(imageFiles[i], null, accessToken, userId);
+      mediaAssets.push(asset);
+      console.log(`📎 LinkedIn file ${i + 1} uploaded successfully, asset:`, asset);
     } catch (mediaError) {
-      console.warn('⚠️ LinkedIn media upload failed:', mediaError.message);
-      // Continue without image - you can choose to throw here if image is mandatory
-      // throw mediaError;
+      console.warn(`⚠️ LinkedIn file ${i + 1} upload failed:`, mediaError.message);
+    }
+  }
+
+  // Upload URLs
+  for (let i = 0; i < imageUrls.length; i++) {
+    try {
+      const asset = await uploadLinkedInMedia(null, imageUrls[i], accessToken, userId);
+      mediaAssets.push(asset);
+      console.log(`📎 LinkedIn URL ${i + 1} uploaded successfully, asset:`, asset);
+    } catch (mediaError) {
+      console.warn(`⚠️ LinkedIn URL ${i + 1} upload failed:`, mediaError.message);
     }
   }
 
@@ -194,7 +197,7 @@ async function postToLinkedIn({ content, accessToken, userId, imageFile, imageUr
         shareCommentary: {
           text: content || ' '
         },
-        shareMediaCategory: mediaAsset ? "IMAGE" : "NONE"
+        shareMediaCategory: mediaAssets.length > 0 ? "IMAGE" : "NONE"
       }
     },
     visibility: {
@@ -202,29 +205,27 @@ async function postToLinkedIn({ content, accessToken, userId, imageFile, imageUr
     }
   };
 
-  // Add media to the post if we have it
-  if (mediaAsset) {
-    postPayload.specificContent["com.linkedin.ugc.ShareContent"].media = [
-      {
-        status: "READY",
-        description: {
-          text: content || 'Image post'
-        },
-        media: mediaAsset,
-        title: {
-          text: "Image"
-        }
+  // Add media to the post if we have any
+  if (mediaAssets.length > 0) {
+    postPayload.specificContent["com.linkedin.ugc.ShareContent"].media = mediaAssets.map((asset, index) => ({
+      status: "READY",
+      description: {
+        text: `Image ${index + 1}`
+      },
+      media: asset,
+      title: {
+        text: `Image ${index + 1}`
       }
-    ];
+    }));
   }
 
   console.log('📝 Posting to LinkedIn with payload:', {
-    hasMedia: !!mediaAsset,
+    hasMedia: mediaAssets.length > 0,
+    mediaCount: mediaAssets.length,
     shareMediaCategory: postPayload.specificContent["com.linkedin.ugc.ShareContent"].shareMediaCategory
   });
 
   try {
-    // Post to LinkedIn
     const response = await axios.post(
       'https://api.linkedin.com/v2/ugcPosts',
       postPayload,
@@ -249,7 +250,7 @@ async function postToLinkedIn({ content, accessToken, userId, imageFile, imageUr
         platform: 'LinkedIn',
         postId: response.data.id,
         data: response.data,
-        message: mediaAsset ? 'LinkedIn post with image published successfully!' : 'LinkedIn post published successfully!'
+        message: `LinkedIn post with ${mediaAssets.length} image${mediaAssets.length !== 1 ? 's' : ''} published successfully!`
       };
     } else {
       throw new Error('Invalid response from LinkedIn API - no post ID returned');
@@ -263,19 +264,16 @@ async function postToLinkedIn({ content, accessToken, userId, imageFile, imageUr
       data: postError.response?.data
     });
 
-    // Provide more specific error messages
-    const errorData = postError.response?.data;
     let errorMessage = 'Failed to post to LinkedIn';
 
-    if (errorData?.message) {
-      errorMessage = errorData.message;
-    } else if (errorData?.error) {
-      errorMessage = errorData.error;
+    if (postError.response?.data?.message) {
+      errorMessage = postError.response.data.message;
+    } else if (postError.response?.data?.error) {
+      errorMessage = postError.response.data.error;
     } else if (postError.message) {
       errorMessage = postError.message;
     }
 
-    // Handle specific LinkedIn API errors
     if (postError.response?.status === 401) {
       errorMessage = 'LinkedIn authentication failed. Please reconnect your account.';
     } else if (postError.response?.status === 403) {
@@ -289,7 +287,7 @@ async function postToLinkedIn({ content, accessToken, userId, imageFile, imageUr
 }
 
 // --------------------
-// TWITTER HELPERS (unchanged from previous version)
+// TWITTER HELPERS - UPDATED FOR MULTIPLE IMAGES
 // --------------------
 async function uploadTwitterMedia(imageFile, imageUrl, accessToken) {
   console.log('🐦 Starting Twitter media upload...');
@@ -341,22 +339,42 @@ async function uploadTwitterMedia(imageFile, imageUrl, accessToken) {
   }
 }
 
-async function postToTwitter({ content, accessToken, imageFile, imageUrl }) {
+async function postToTwitter({ content, accessToken, imageFiles = [], imageUrls = [] }) {
   if (!accessToken) throw new Error('Twitter access token required');
-  if (!content && !imageFile && !imageUrl) throw new Error('Content or image required');
+  if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
+    throw new Error('Content or images required');
+  }
 
-  let mediaId = null;
-  if (imageFile || imageUrl) {
+  let mediaIds = [];
+  
+  // Twitter supports max 4 images per tweet
+  const allImages = [...imageFiles, ...imageUrls];
+  const maxImages = Math.min(allImages.length, 4);
+
+  // Upload files
+  for (let i = 0; i < Math.min(imageFiles.length, maxImages); i++) {
     try {
-      mediaId = await uploadTwitterMedia(imageFile, imageUrl, accessToken);
+      const mediaId = await uploadTwitterMedia(imageFiles[i], null, accessToken);
+      mediaIds.push(mediaId);
     } catch (err) {
-      console.warn('⚠️ Twitter media upload failed:', err.message);
+      console.warn(`⚠️ Twitter file ${i + 1} upload failed:`, err.message);
+    }
+  }
+
+  // Upload URLs (only if we haven't reached the limit)
+  const remainingSlots = maxImages - mediaIds.length;
+  for (let i = 0; i < Math.min(imageUrls.length, remainingSlots); i++) {
+    try {
+      const mediaId = await uploadTwitterMedia(null, imageUrls[i], accessToken);
+      mediaIds.push(mediaId);
+    } catch (err) {
+      console.warn(`⚠️ Twitter URL ${i + 1} upload failed:`, err.message);
     }
   }
 
   const tweetPayload = { text: content || ' ' };
-  if (mediaId) {
-    tweetPayload.media = { media_ids: [mediaId] };
+  if (mediaIds.length > 0) {
+    tweetPayload.media = { media_ids: mediaIds };
   }
 
   const response = await axios.post('https://api.twitter.com/2/tweets', tweetPayload, {
@@ -372,67 +390,153 @@ async function postToTwitter({ content, accessToken, imageFile, imageUrl }) {
       platform: 'Twitter',
       postId: response.data.data.id,
       data: response.data.data,
-      message: 'Tweet posted successfully!'
+      message: `Tweet with ${mediaIds.length} image${mediaIds.length !== 1 ? 's' : ''} posted successfully!`
     };
   }
   throw new Error('Invalid response from Twitter API');
 }
 
 // --------------------
-// FACEBOOK HELPERS (unchanged)
+// FACEBOOK HELPERS - UPDATED FOR MULTIPLE IMAGES
 // --------------------
-async function postToFacebook({ content, pageId, pageToken, imageFile, imageUrl }) {
+async function postToFacebook({ content, pageId, pageToken, imageFiles = [], imageUrls = [] }) {
   if (!pageId || !pageToken) throw new Error('Facebook page ID and token required');
-  if (!content && !imageFile && !imageUrl) throw new Error('Content or image required');
+  if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
+    throw new Error('Content or images required');
+  }
 
-  let response;
-  if (imageFile) {
-    const formData = new FormData();
-    formData.append('source', imageFile.buffer, {
-      filename: imageFile.originalname,
-      contentType: imageFile.mimetype
-    });
-    formData.append('caption', content || '');
-    formData.append('access_token', pageToken);
-
-    response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, formData, {
-      headers: formData.getHeaders()
-    });
-  } else if (imageUrl && imageUrl.trim()) {
-    response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
-      url: imageUrl,
-      caption: content || '',
-      access_token: pageToken
-    });
-  } else {
-    response = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
+  const allImages = [...imageFiles, ...imageUrls];
+  
+  if (allImages.length === 0) {
+    // Text-only post
+    const response = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
       message: content,
       access_token: pageToken
     });
+
+    if (response.data?.id) {
+      return {
+        success: true,
+        platform: 'Facebook',
+        postId: response.data.id,
+        data: response.data,
+        message: 'Facebook post published successfully!'
+      };
+    }
+  } else if (allImages.length === 1) {
+    // Single image post
+    let response;
+    
+    if (imageFiles.length > 0) {
+      const formData = new FormData();
+      formData.append('source', imageFiles[0].buffer, {
+        filename: imageFiles[0].originalname,
+        contentType: imageFiles[0].mimetype
+      });
+      formData.append('caption', content || '');
+      formData.append('access_token', pageToken);
+
+      response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, formData, {
+        headers: formData.getHeaders()
+      });
+    } else {
+      response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
+        url: imageUrls[0],
+        caption: content || '',
+        access_token: pageToken
+      });
+    }
+
+    if (response.data?.id) {
+      return {
+        success: true,
+        platform: 'Facebook',
+        postId: response.data.id,
+        data: response.data,
+        message: 'Facebook post with image published successfully!'
+      };
+    }
+  } else {
+    // Multiple images post (album)
+    const photoIds = [];
+    
+    // Upload files
+    for (let i = 0; i < imageFiles.length; i++) {
+      try {
+        const formData = new FormData();
+        formData.append('source', imageFiles[i].buffer, {
+          filename: imageFiles[i].originalname,
+          contentType: imageFiles[i].mimetype
+        });
+        formData.append('published', 'false'); // Don't publish immediately
+        formData.append('access_token', pageToken);
+
+        const uploadResponse = await axios.post(
+          `https://graph.facebook.com/${pageId}/photos`,
+          formData,
+          { headers: formData.getHeaders() }
+        );
+
+        if (uploadResponse.data?.id) {
+          photoIds.push(uploadResponse.data.id);
+        }
+      } catch (err) {
+        console.warn(`⚠️ Facebook file ${i + 1} upload failed:`, err.message);
+      }
+    }
+
+    // Upload URLs
+    for (let i = 0; i < imageUrls.length; i++) {
+      try {
+        const uploadResponse = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
+          url: imageUrls[i],
+          published: false,
+          access_token: pageToken
+        });
+
+        if (uploadResponse.data?.id) {
+          photoIds.push(uploadResponse.data.id);
+        }
+      } catch (err) {
+        console.warn(`⚠️ Facebook URL ${i + 1} upload failed:`, err.message);
+      }
+    }
+
+    if (photoIds.length > 0) {
+      // Create album post
+      const albumResponse = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
+        message: content || '',
+        attached_media: photoIds.map(id => ({ media_fbid: id })),
+        access_token: pageToken
+      });
+
+      if (albumResponse.data?.id) {
+        return {
+          success: true,
+          platform: 'Facebook',
+          postId: albumResponse.data.id,
+          data: albumResponse.data,
+          message: `Facebook post with ${photoIds.length} images published successfully!`
+        };
+      }
+    }
   }
 
-  if (response.data?.id) {
-    return {
-      success: true,
-      platform: 'Facebook',
-      postId: response.data.id,
-      data: response.data,
-      message: 'Facebook post published successfully!'
-    };
-  }
   throw new Error('Invalid response from Facebook API');
 }
 
 // --------------------
-// INDIVIDUAL ROUTES
+// INDIVIDUAL ROUTES - UPDATED FOR MULTIPLE IMAGES
 // --------------------
-router.post('/twitter', upload.single('image'), async (req, res) => {
+router.post('/twitter', upload.array('images', 4), async (req, res) => {
   try {
+    const imageUrls = req.body.imageUrls ? req.body.imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+    
     const result = await postToTwitter({
       content: req.body.content,
       accessToken: req.body.accessToken,
-      imageFile: req.file,
-      imageUrl: req.body.imageUrl
+      imageFiles: req.files || [],
+      imageUrls: imageUrls
     });
     res.json(result);
   } catch (error) {
@@ -440,14 +544,16 @@ router.post('/twitter', upload.single('image'), async (req, res) => {
   }
 });
 
-router.post('/facebook', upload.single('image'), async (req, res) => {
+router.post('/facebook', upload.array('images', 10), async (req, res) => {
   try {
+    const imageUrls = req.body.imageUrls ? req.body.imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+    
     const result = await postToFacebook({
       content: req.body.content,
       pageId: req.body.pageId,
       pageToken: req.body.pageToken,
-      imageFile: req.file,
-      imageUrl: req.body.imageUrl
+      imageFiles: req.files || [],
+      imageUrls: imageUrls
     });
     res.json(result);
   } catch (error) {
@@ -455,22 +561,24 @@ router.post('/facebook', upload.single('image'), async (req, res) => {
   }
 });
 
-router.post('/linkedin', upload.single('image'), async (req, res) => {
+router.post('/linkedin', upload.array('images', 9), async (req, res) => {
   try {
     console.log('📥 LinkedIn route hit:', {
       hasContent: !!req.body.content,
-      hasFile: !!req.file,
-      hasImageUrl: !!req.body.imageUrl,
+      fileCount: req.files?.length || 0,
+      hasImageUrls: !!req.body.imageUrls,
       hasToken: !!req.body.accessToken,
       hasUserId: !!req.body.userId
     });
+
+    const imageUrls = req.body.imageUrls ? req.body.imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
 
     const result = await postToLinkedIn({
       content: req.body.content,
       accessToken: req.body.accessToken,
       userId: req.body.userId,
-      imageFile: req.file,
-      imageUrl: req.body.imageUrl
+      imageFiles: req.files || [],
+      imageUrls: imageUrls
     });
     res.json(result);
   } catch (error) {
@@ -480,17 +588,17 @@ router.post('/linkedin', upload.single('image'), async (req, res) => {
 });
 
 // --------------------
-// MULTI-PLATFORM ROUTE - UPDATED
+// MULTI-PLATFORM ROUTE - UPDATED FOR MULTIPLE IMAGES
 // --------------------
-router.post('/multi', upload.single('image'), async (req, res) => {
+router.post('/multi', upload.array('images', 10), async (req, res) => {
   try {
     console.log('📤 Multi-platform request received:', {
       body: req.body,
-      hasFile: !!req.file
+      fileCount: req.files?.length || 0
     });
 
-    const { content, platforms, credentials, imageUrl } = req.body;
-    const imageFile = req.file;
+    const { content, platforms, credentials, imageUrls } = req.body;
+    const imageFiles = req.files || [];
 
     let parsedPlatforms;
     let parsedCredentials;
@@ -514,8 +622,11 @@ router.post('/multi', upload.single('image'), async (req, res) => {
       });
     }
 
+    // Parse image URLs
+    const parsedImageUrls = imageUrls ? imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+
     const postPromises = parsedPlatforms.map(async (platform) => {
-      console.log(`🚀 Posting to ${platform}...`);
+      console.log(`🚀 Posting to ${platform} with ${imageFiles.length} files and ${parsedImageUrls.length} URLs...`);
       
       try {
         let result;
@@ -527,8 +638,8 @@ router.post('/multi', upload.single('image'), async (req, res) => {
             result = await postToTwitter({
               content,
               accessToken: parsedCredentials.twitter.accessToken,
-              imageFile,
-              imageUrl
+              imageFiles: imageFiles.slice(0, 4), // Twitter max 4 images
+              imageUrls: parsedImageUrls.slice(0, 4 - imageFiles.length)
             });
             break;
             
@@ -540,8 +651,8 @@ router.post('/multi', upload.single('image'), async (req, res) => {
               content,
               pageId: parsedCredentials.facebook.pageId,
               pageToken: parsedCredentials.facebook.pageToken,
-              imageFile,
-              imageUrl
+              imageFiles,
+              imageUrls: parsedImageUrls
             });
             break;
             
@@ -553,8 +664,8 @@ router.post('/multi', upload.single('image'), async (req, res) => {
               content,
               accessToken: parsedCredentials.linkedin.accessToken,
               userId: parsedCredentials.linkedin.userId,
-              imageFile,
-              imageUrl
+              imageFiles: imageFiles.slice(0, 9), // LinkedIn max 9 images
+              imageUrls: parsedImageUrls.slice(0, 9 - imageFiles.length)
             });
             break;
             
@@ -578,7 +689,8 @@ router.post('/multi', upload.single('image'), async (req, res) => {
     console.log('📊 Multi-platform results:', {
       total: parsedPlatforms.length,
       successful: successful.length,
-      failed: failed.length
+      failed: failed.length,
+      totalImages: imageFiles.length + parsedImageUrls.length
     });
 
     res.json({
@@ -588,7 +700,7 @@ router.post('/multi', upload.single('image'), async (req, res) => {
       failed: failed.length,
       results,
       message: successful.length === parsedPlatforms.length
-        ? `Successfully posted to all ${parsedPlatforms.length} platforms!`
+        ? `Successfully posted to all ${parsedPlatforms.length} platforms with ${imageFiles.length + parsedImageUrls.length} images!`
         : `Posted to ${successful.length} out of ${parsedPlatforms.length} platforms`
     });
 
