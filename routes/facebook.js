@@ -97,7 +97,7 @@ router.get("/callback", async (req, res) => {
     );
     res.redirect(`/facebook-callback.html?error=token_exchange_failed`);
   }
-});
+});                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
 
 // Step 3: Get Facebook user data
 router.get("/user/:sessionId", (req, res) => {
