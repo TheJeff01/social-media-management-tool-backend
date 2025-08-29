@@ -4,6 +4,14 @@ const multer = require('multer');
 const FormData = require('form-data');
 const router = express.Router();
 
+// Helper to create errors with HTTP metadata
+function httpError(message, status, retryAfter) {
+  const err = new Error(message || 'Request failed');
+  if (status) err.status = status;
+  if (retryAfter) err.retryAfter = retryAfter;
+  return err;
+}
+
 // Configure multer for multiple file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -143,8 +151,8 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
                         uploadError.response?.data?.error || 
                         uploadError.message || 
                         'LinkedIn media upload failed';
-    
-    throw new Error(`LinkedIn media upload failed: ${errorMessage}`);
+    const retryAfter = uploadError.response?.headers?.['retry-after'];
+    throw httpError(`LinkedIn media upload failed: ${errorMessage}`, uploadError.response?.status || 500, retryAfter);
   }
 }
 
@@ -281,8 +289,8 @@ async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], i
     } else if (postError.response?.status === 429) {
       errorMessage = 'LinkedIn rate limit exceeded. Please try again later.';
     }
-
-    throw new Error(errorMessage);
+    const retryAfter = postError.response?.headers?.['retry-after'];
+    throw httpError(errorMessage, postError.response?.status || 500, retryAfter);
   }
 }
 
@@ -340,189 +348,214 @@ async function uploadTwitterMedia(imageFile, imageUrl, accessToken) {
 }
 
 async function postToTwitter({ content, accessToken, imageFiles = [], imageUrls = [] }) {
-  if (!accessToken) throw new Error('Twitter access token required');
+  if (!accessToken) throw httpError('Twitter access token required', 400);
   if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
-    throw new Error('Content or images required');
+    throw httpError('Content or images required', 400);
   }
 
-  let mediaIds = [];
-  
-  // Twitter supports max 4 images per tweet
-  const allImages = [...imageFiles, ...imageUrls];
-  const maxImages = Math.min(allImages.length, 4);
+  try {
+    let mediaIds = [];
+    
+    // Twitter supports max 4 images per tweet
+    const allImages = [...imageFiles, ...imageUrls];
+    const maxImages = Math.min(allImages.length, 4);
 
-  // Upload files
-  for (let i = 0; i < Math.min(imageFiles.length, maxImages); i++) {
-    try {
-      const mediaId = await uploadTwitterMedia(imageFiles[i], null, accessToken);
-      mediaIds.push(mediaId);
-    } catch (err) {
-      console.warn(`⚠️ Twitter file ${i + 1} upload failed:`, err.message);
+    // Upload files
+    for (let i = 0; i < Math.min(imageFiles.length, maxImages); i++) {
+      try {
+        const mediaId = await uploadTwitterMedia(imageFiles[i], null, accessToken);
+        mediaIds.push(mediaId);
+      } catch (err) {
+        console.warn(`⚠️ Twitter file ${i + 1} upload failed:`, err.message);
+      }
     }
-  }
 
-  // Upload URLs (only if we haven't reached the limit)
-  const remainingSlots = maxImages - mediaIds.length;
-  for (let i = 0; i < Math.min(imageUrls.length, remainingSlots); i++) {
-    try {
-      const mediaId = await uploadTwitterMedia(null, imageUrls[i], accessToken);
-      mediaIds.push(mediaId);
-    } catch (err) {
-      console.warn(`⚠️ Twitter URL ${i + 1} upload failed:`, err.message);
+    // Upload URLs (only if we haven't reached the limit)
+    const remainingSlots = maxImages - mediaIds.length;
+    for (let i = 0; i < Math.min(imageUrls.length, remainingSlots); i++) {
+      try {
+        const mediaId = await uploadTwitterMedia(null, imageUrls[i], accessToken);
+        mediaIds.push(mediaId);
+      } catch (err) {
+        console.warn(`⚠️ Twitter URL ${i + 1} upload failed:`, err.message);
+      }
     }
-  }
 
-  const tweetPayload = { text: content || ' ' };
-  if (mediaIds.length > 0) {
-    tweetPayload.media = { media_ids: mediaIds };
-  }
-
-  const response = await axios.post('https://api.twitter.com/2/tweets', tweetPayload, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
+    const tweetPayload = { text: content || ' ' };
+    if (mediaIds.length > 0) {
+      tweetPayload.media = { media_ids: mediaIds };
     }
-  });
 
-  if (response.data?.data) {
-    return {
-      success: true,
-      platform: 'Twitter',
-      postId: response.data.data.id,
-      data: response.data.data,
-      message: `Tweet with ${mediaIds.length} image${mediaIds.length !== 1 ? 's' : ''} posted successfully!`
-    };
+    const response = await axios.post('https://api.twitter.com/2/tweets', tweetPayload, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.data?.data) {
+      return {
+        success: true,
+        platform: 'Twitter',
+        postId: response.data.data.id,
+        data: response.data.data,
+        message: `Tweet with ${mediaIds.length} image${mediaIds.length !== 1 ? 's' : ''} posted successfully!`
+      };
+    }
+    throw httpError('Invalid response from Twitter API', 502);
+
+  } catch (e) {
+    const status = e.response?.status || e.status || 500;
+    const retryAfter = e.response?.headers?.['retry-after'] || e.retryAfter;
+    let message = 'Failed to post to Twitter';
+    if (e.response?.data?.error) message = e.response.data.error;
+    else if (e.message) message = e.message;
+    if (status === 429 && !/rate limit/i.test(message)) {
+      message = 'Twitter rate limit exceeded. Please try again later.';
+    }
+    throw httpError(message, status, retryAfter);
   }
-  throw new Error('Invalid response from Twitter API');
 }
 
 // --------------------
 // FACEBOOK HELPERS - UPDATED FOR MULTIPLE IMAGES
 // --------------------
 async function postToFacebook({ content, pageId, pageToken, imageFiles = [], imageUrls = [] }) {
-  if (!pageId || !pageToken) throw new Error('Facebook page ID and token required');
+  if (!pageId || !pageToken) throw httpError('Facebook page ID and token required', 400);
   if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
-    throw new Error('Content or images required');
+    throw httpError('Content or images required', 400);
   }
 
-  const allImages = [...imageFiles, ...imageUrls];
-  
-  if (allImages.length === 0) {
-    // Text-only post
-    const response = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
-      message: content,
-      access_token: pageToken
-    });
-
-    if (response.data?.id) {
-      return {
-        success: true,
-        platform: 'Facebook',
-        postId: response.data.id,
-        data: response.data,
-        message: 'Facebook post published successfully!'
-      };
-    }
-  } else if (allImages.length === 1) {
-    // Single image post
-    let response;
+  try {
+    const allImages = [...imageFiles, ...imageUrls];
     
-    if (imageFiles.length > 0) {
-      const formData = new FormData();
-      formData.append('source', imageFiles[0].buffer, {
-        filename: imageFiles[0].originalname,
-        contentType: imageFiles[0].mimetype
-      });
-      formData.append('caption', content || '');
-      formData.append('access_token', pageToken);
-
-      response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, formData, {
-        headers: formData.getHeaders()
-      });
-    } else {
-      response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
-        url: imageUrls[0],
-        caption: content || '',
-        access_token: pageToken
-      });
-    }
-
-    if (response.data?.id) {
-      return {
-        success: true,
-        platform: 'Facebook',
-        postId: response.data.id,
-        data: response.data,
-        message: 'Facebook post with image published successfully!'
-      };
-    }
-  } else {
-    // Multiple images post (album)
-    const photoIds = [];
-    
-    // Upload files
-    for (let i = 0; i < imageFiles.length; i++) {
-      try {
-        const formData = new FormData();
-        formData.append('source', imageFiles[i].buffer, {
-          filename: imageFiles[i].originalname,
-          contentType: imageFiles[i].mimetype
-        });
-        formData.append('published', 'false'); // Don't publish immediately
-        formData.append('access_token', pageToken);
-
-        const uploadResponse = await axios.post(
-          `https://graph.facebook.com/${pageId}/photos`,
-          formData,
-          { headers: formData.getHeaders() }
-        );
-
-        if (uploadResponse.data?.id) {
-          photoIds.push(uploadResponse.data.id);
-        }
-      } catch (err) {
-        console.warn(`⚠️ Facebook file ${i + 1} upload failed:`, err.message);
-      }
-    }
-
-    // Upload URLs
-    for (let i = 0; i < imageUrls.length; i++) {
-      try {
-        const uploadResponse = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
-          url: imageUrls[i],
-          published: false,
-          access_token: pageToken
-        });
-
-        if (uploadResponse.data?.id) {
-          photoIds.push(uploadResponse.data.id);
-        }
-      } catch (err) {
-        console.warn(`⚠️ Facebook URL ${i + 1} upload failed:`, err.message);
-      }
-    }
-
-    if (photoIds.length > 0) {
-      // Create album post
-      const albumResponse = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
-        message: content || '',
-        attached_media: photoIds.map(id => ({ media_fbid: id })),
+    if (allImages.length === 0) {
+      // Text-only post
+      const response = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
+        message: content,
         access_token: pageToken
       });
 
-      if (albumResponse.data?.id) {
+      if (response.data?.id) {
         return {
           success: true,
           platform: 'Facebook',
-          postId: albumResponse.data.id,
-          data: albumResponse.data,
-          message: `Facebook post with ${photoIds.length} images published successfully!`
+          postId: response.data.id,
+          data: response.data,
+          message: 'Facebook post published successfully!'
         };
       }
-    }
-  }
+    } else if (allImages.length === 1) {
+      // Single image post
+      let response;
+      
+      if (imageFiles.length > 0) {
+        const formData = new FormData();
+        formData.append('source', imageFiles[0].buffer, {
+          filename: imageFiles[0].originalname,
+          contentType: imageFiles[0].mimetype
+        });
+        formData.append('caption', content || '');
+        formData.append('access_token', pageToken);
 
-  throw new Error('Invalid response from Facebook API');
+        response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, formData, {
+          headers: formData.getHeaders()
+        });
+      } else {
+        response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
+          url: imageUrls[0],
+          caption: content || '',
+          access_token: pageToken
+        });
+      }
+
+      if (response.data?.id) {
+        return {
+          success: true,
+          platform: 'Facebook',
+          postId: response.data.id,
+          data: response.data,
+          message: 'Facebook post with image published successfully!'
+        };
+      }
+    } else {
+      // Multiple images post (album)
+      const photoIds = [];
+      
+      // Upload files
+      for (let i = 0; i < imageFiles.length; i++) {
+        try {
+          const formData = new FormData();
+          formData.append('source', imageFiles[i].buffer, {
+            filename: imageFiles[i].originalname,
+            contentType: imageFiles[i].mimetype
+          });
+          formData.append('published', 'false'); // Don't publish immediately
+          formData.append('access_token', pageToken);
+
+          const uploadResponse = await axios.post(
+            `https://graph.facebook.com/${pageId}/photos`,
+            formData,
+            { headers: formData.getHeaders() }
+          );
+
+          if (uploadResponse.data?.id) {
+            photoIds.push(uploadResponse.data.id);
+          }
+        } catch (err) {
+          console.warn(`⚠️ Facebook file ${i + 1} upload failed:`, err.message);
+        }
+      }
+
+      // Upload URLs
+      for (let i = 0; i < imageUrls.length; i++) {
+        try {
+          const uploadResponse = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
+            url: imageUrls[i],
+            published: false,
+            access_token: pageToken
+          });
+
+          if (uploadResponse.data?.id) {
+            photoIds.push(uploadResponse.data.id);
+          }
+        } catch (err) {
+          console.warn(`⚠️ Facebook URL ${i + 1} upload failed:`, err.message);
+        }
+      }
+
+      if (photoIds.length > 0) {
+        // Create album post
+        const albumResponse = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
+          message: content || '',
+          attached_media: photoIds.map(id => ({ media_fbid: id })),
+          access_token: pageToken
+        });
+
+        if (albumResponse.data?.id) {
+          return {
+            success: true,
+            platform: 'Facebook',
+            postId: albumResponse.data.id,
+            data: albumResponse.data,
+            message: `Facebook post with ${photoIds.length} images published successfully!`
+          };
+        }
+      }
+    }
+
+    throw httpError('Invalid response from Facebook API', 502);
+  } catch (e) {
+    const status = e.response?.status || e.status || 500;
+    const retryAfter = e.response?.headers?.['retry-after'] || e.retryAfter;
+    let message = 'Failed to post to Facebook';
+    if (e.response?.data?.error?.message) message = e.response.data.error.message;
+    else if (e.message) message = e.message;
+    if (status === 429 && !/rate limit/i.test(message)) {
+      message = 'Facebook rate limit exceeded. Please try again later.';
+    }
+    throw httpError(message, status, retryAfter);
+  }
 }
 
 // --------------------
@@ -685,8 +718,8 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
     } else if (postError.message) {
       errorMessage = postError.message;
     }
-
-    throw new Error(errorMessage);
+    const retryAfter = postError.response?.headers?.['retry-after'];
+    throw httpError(errorMessage, postError.response?.status || 500, retryAfter);
   }
 }
 
@@ -705,7 +738,9 @@ router.post('/twitter', upload.array('images', 4), async (req, res) => {
     });
     res.json(result);
   } catch (error) {
-    res.status(500).json({ success: false, platform: 'Twitter', error: error.message });
+    const status = error.status || error.response?.status || 500;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+    res.status(status).json({ success: false, platform: 'Twitter', error: error.message });
   }
 });
 
@@ -722,7 +757,9 @@ router.post('/facebook', upload.array('images', 10), async (req, res) => {
     });
     res.json(result);
   } catch (error) {
-    res.status(500).json({ success: false, platform: 'Facebook', error: error.message });
+    const status = error.status || error.response?.status || 500;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+    res.status(status).json({ success: false, platform: 'Facebook', error: error.message });
   }
 });
 
@@ -748,7 +785,9 @@ router.post('/linkedin', upload.array('images', 9), async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('❌ LinkedIn route error:', error.message);
-    res.status(500).json({ success: false, platform: 'LinkedIn', error: error.message });
+    const status = error.status || error.response?.status || 500;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+    res.status(status).json({ success: false, platform: 'LinkedIn', error: error.message });
   }
 });
 
@@ -781,7 +820,9 @@ router.post('/instagram', upload.array('images', 1), async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('❌ Instagram route error:', error.message);
-    res.status(500).json({ success: false, platform: 'Instagram', error: error.message });
+    const status = error.status || error.response?.status || 500;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+    res.status(status).json({ success: false, platform: 'Instagram', error: error.message });
   }
 });
 
