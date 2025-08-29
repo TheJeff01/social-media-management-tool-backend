@@ -29,13 +29,14 @@ module.exports = {
     userUrl: 'https://graph.facebook.com/v18.0/me',
     scope: 'pages_manage_posts,pages_show_list,pages_read_engagement,public_profile'
   },
-   instagram: {
-    clientId: process.env.INSTAGRAM_CLIENT_ID,
-    clientSecret: process.env.INSTAGRAM_CLIENT_SECRET,
+  // Instagram uses Facebook's Graph API for business accounts
+  instagram: {
+    clientId: process.env.INSTAGRAM_CLIENT_ID, // Same as Facebook App ID
+    clientSecret: process.env.INSTAGRAM_CLIENT_SECRET, // Same as Facebook App Secret
     redirectUri: process.env.INSTAGRAM_REDIRECT_URI,
-    authUrl: 'https://api.instagram.com/oauth/authorize',
-    tokenUrl: 'https://api.instagram.com/oauth/access_token',
-    userUrl: 'https://graph.instagram.com/me',
-    scope: 'user_profile,user_media'
+    authUrl: 'https://www.facebook.com/v18.0/dialog/oauth', // Uses Facebook OAuth
+    tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token', // Uses Facebook token endpoint
+    userUrl: 'https://graph.facebook.com/v18.0/me', // Uses Facebook user endpoint
+    scope: 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management'
   }
 };

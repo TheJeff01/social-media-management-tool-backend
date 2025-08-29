@@ -7,19 +7,21 @@ const oauthConfig = require('../config/oauth');
 const pkceUtils = require('../utils/pkce');
 const tokenUtils = require('../utils/tokens');
 
-// Step 1: Initiate Instagram OAuth
+// Step 1: Initiate Instagram OAuth (via Facebook)
 router.get('/', (req, res) => {
   try {
     const state = pkceUtils.generateState();
     
-    const authUrl = new URL(oauthConfig.instagram.authUrl);
-    authUrl.searchParams.append('client_id', oauthConfig.instagram.clientId);
+    // Use Facebook OAuth for Instagram - this is the correct approach
+    const authUrl = new URL('https://www.facebook.com/v18.0/dialog/oauth');
+    authUrl.searchParams.append('client_id', oauthConfig.instagram.clientId); // Same as Facebook App ID
     authUrl.searchParams.append('redirect_uri', oauthConfig.instagram.redirectUri);
-    authUrl.searchParams.append('scope', oauthConfig.instagram.scope);
+    // Instagram Graph API scopes for business accounts
+    authUrl.searchParams.append('scope', 'instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement,business_management');
     authUrl.searchParams.append('response_type', 'code');
     authUrl.searchParams.append('state', state);
 
-    console.log('📷 Redirecting to Instagram OAuth:', authUrl.toString());
+    console.log('📷 Redirecting to Instagram Graph API OAuth (via Facebook):', authUrl.toString());
     res.redirect(authUrl.toString());
   } catch (error) {
     console.error('Instagram OAuth initiation error:', error);
@@ -29,11 +31,18 @@ router.get('/', (req, res) => {
 
 // Step 2: Handle Instagram OAuth callback
 router.get('/callback', async (req, res) => {
-  const { code, state, error } = req.query;
+  const { code, state, error, error_reason, error_description } = req.query;
+
+  console.log('Instagram callback received:', {
+    code: code ? 'present' : undefined,
+    error,
+    error_reason,
+    error_description
+  });
 
   if (error) {
-    console.error('Instagram OAuth error:', error);
-    return res.redirect(`/instagram-callback.html?error=${error}`);
+    console.error('Instagram OAuth error:', error, error_description);
+    return res.redirect(`/instagram-callback.html?error=${encodeURIComponent(error)}`);
   }
 
   if (!code) {
@@ -41,70 +50,105 @@ router.get('/callback', async (req, res) => {
   }
 
   try {
-    // Exchange code for access token
-    const tokenResponse = await axios.post(oauthConfig.instagram.tokenUrl, {
-      client_id: oauthConfig.instagram.clientId,
-      client_secret: oauthConfig.instagram.clientSecret,
-      grant_type: 'authorization_code',
-      redirect_uri: oauthConfig.instagram.redirectUri,
-      code: code
-    }, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
+    console.log('📷 Exchanging code for Instagram access token...');
+
+    // Step 1: Exchange code for Facebook access token
+    const tokenResponse = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+      params: {
+        client_id: oauthConfig.instagram.clientId,
+        client_secret: oauthConfig.instagram.clientSecret,
+        redirect_uri: oauthConfig.instagram.redirectUri,
+        code: code
       }
     });
 
-    const { access_token, user_id } = tokenResponse.data;
+    const { access_token } = tokenResponse.data;
 
     if (!access_token) {
-      throw new Error('No access token received from Instagram');
+      throw new Error('No access token received from Facebook');
     }
 
-    // Get long-lived token (optional but recommended)
-    let longLivedToken = access_token;
-    try {
-      const longLivedResponse = await axios.get(`https://graph.instagram.com/access_token`, {
-        params: {
-          grant_type: 'ig_exchange_token',
-          client_secret: oauthConfig.instagram.clientSecret,
-          access_token: access_token
-        }
-      });
-      
-      if (longLivedResponse.data.access_token) {
-        longLivedToken = longLivedResponse.data.access_token;
-        console.log('✅ Got long-lived Instagram token');
-      }
-    } catch (longLivedError) {
-      console.warn('⚠️ Could not get long-lived token:', longLivedError.message);
-      // Continue with short-lived token
-    }
+    console.log('✅ Facebook access token received');
 
-    // Get user profile data
-    const userResponse = await axios.get(oauthConfig.instagram.userUrl, {
+    // Step 2: Get user's Facebook pages (which may be connected to Instagram)
+    const pagesResponse = await axios.get('https://graph.facebook.com/v18.0/me/accounts', {
       params: {
-        fields: 'id,username,account_type,media_count',
-        access_token: longLivedToken
+        access_token: access_token,
+        fields: 'id,name,access_token,instagram_business_account'
+      }
+    });
+
+    const pages = pagesResponse.data.data || [];
+    console.log('📄 Found pages:', pages.length);
+
+    // Step 3: Find pages with Instagram business accounts
+    let instagramAccounts = [];
+    
+    for (const page of pages) {
+      if (page.instagram_business_account) {
+        try {
+          // Get Instagram account details
+          const igResponse = await axios.get(`https://graph.facebook.com/v18.0/${page.instagram_business_account.id}`, {
+            params: {
+              fields: 'id,username,name,biography,profile_picture_url,followers_count,follows_count,media_count',
+              access_token: page.access_token
+            }
+          });
+
+          instagramAccounts.push({
+            ...igResponse.data,
+            page_id: page.id,
+            page_name: page.name,
+            page_access_token: page.access_token
+          });
+
+          console.log('📷 Found Instagram account:', igResponse.data.username);
+        } catch (igError) {
+          console.warn('⚠️ Could not fetch Instagram account details:', igError.message);
+        }
+      }
+    }
+
+    if (instagramAccounts.length === 0) {
+      console.warn('⚠️ No Instagram business accounts found');
+      return res.redirect(`/instagram-callback.html?error=no_instagram_accounts`);
+    }
+
+    // Step 4: Get basic user profile from Facebook
+    const userResponse = await axios.get('https://graph.facebook.com/v18.0/me', {
+      params: {
+        fields: 'id,name,email,picture',
+        access_token: access_token
       }
     });
 
     const user = userResponse.data;
 
-    // Create session
+    // Step 5: Create session with all data
     const sessionId = uuidv4();
     tokenUtils.storeTokens(sessionId, {
       platform: 'instagram',
-      accessToken: longLivedToken,
-      userId: user_id,
-      user: user
+      accessToken: access_token,
+      user: user,
+      instagramAccounts: instagramAccounts,
+      pages: pages
     });
+
+    console.log('✅ Instagram OAuth flow completed successfully');
 
     // Redirect to callback page with session ID for popup communication
     res.redirect(`/instagram-callback.html?success=true&session=${sessionId}`);
 
   } catch (error) {
-    console.error('Instagram token exchange error:', error.response?.data || error.message);
-    res.redirect(`/instagram-callback.html?error=token_exchange_failed`);
+    console.error('❌ Instagram token exchange failed:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data
+    });
+    
+    const errorMessage = error.response?.data?.error?.message || 'token_exchange_failed';
+    res.redirect(`/instagram-callback.html?error=${encodeURIComponent(errorMessage)}`);
   }
 });
 
@@ -117,28 +161,18 @@ router.get('/user/:sessionId', (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  // Enhance user data with proper structure
-  const enhancedUser = {
-    id: tokens.user.id || tokens.userId,
-    username: tokens.user.username || 'instagram_user',
-    name: tokens.user.username || 'Instagram User', // Instagram Basic Display doesn't provide display name
-    account_type: tokens.user.account_type || 'PERSONAL',
-    media_count: tokens.user.media_count || 0,
-    // Note: Instagram Basic Display API doesn't provide follower count for privacy
-    followers_count: null,
-    profile_picture_url: null // Not available in Instagram Basic Display API
-  };
-
-  // Return user data and clean up session
-  const userData = {
+  // Prepare response data
+  const responseData = {
     platform: 'instagram',
-    user: enhancedUser,
+    user: tokens.user,
+    instagramAccounts: tokens.instagramAccounts,
     accessToken: tokens.accessToken,
     timestamp: tokens.timestamp
   };
 
+  // Clean up session after use
   tokenUtils.removeTokens(sessionId);
-  res.json(userData);
+  res.json(responseData);
 });
 
 module.exports = router;

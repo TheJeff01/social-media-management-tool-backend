@@ -526,6 +526,171 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], ima
 }
 
 // --------------------
+// INSTAGRAM HELPERS
+// --------------------
+async function postToInstagram({ content, pageAccessToken, instagramAccountId, imageUrls = [] }) {
+  console.log('📷 Starting Instagram Graph API post:', {
+    hasContent: !!content,
+    imageUrlCount: imageUrls.length,
+    hasPageToken: !!pageAccessToken,
+    hasIgAccountId: !!instagramAccountId
+  });
+
+  if (!pageAccessToken || !instagramAccountId) {
+    throw new Error('Instagram page access token and account ID are required');
+  }
+
+  if (!content && imageUrls.length === 0) {
+    throw new Error('Content or images are required for Instagram posts');
+  }
+
+  try {
+    if (imageUrls.length === 0) {
+      // Text-only posts are not supported on Instagram
+      throw new Error('Instagram requires at least one image. Text-only posts are not supported.');
+    }
+
+    if (imageUrls.length === 1) {
+      // Single image post
+      console.log('📷 Creating single image Instagram post...');
+      
+      // Step 1: Create media container
+      const containerResponse = await axios.post(
+        `https://graph.facebook.com/v18.0/${instagramAccountId}/media`,
+        {
+          image_url: imageUrls[0],
+          caption: content || '',
+          access_token: pageAccessToken
+        }
+      );
+
+      if (!containerResponse.data?.id) {
+        throw new Error('Failed to create Instagram media container');
+      }
+
+      const containerId = containerResponse.data.id;
+      console.log('✅ Instagram media container created:', containerId);
+
+      // Step 2: Publish the media
+      const publishResponse = await axios.post(
+        `https://graph.facebook.com/v18.0/${instagramAccountId}/media_publish`,
+        {
+          creation_id: containerId,
+          access_token: pageAccessToken
+        }
+      );
+
+      if (publishResponse.data?.id) {
+        return {
+          success: true,
+          platform: 'Instagram',
+          postId: publishResponse.data.id,
+          data: publishResponse.data,
+          message: 'Instagram post published successfully!'
+        };
+      }
+
+    } else if (imageUrls.length <= 10) {
+      // Carousel post (multiple images)
+      console.log('📷 Creating Instagram carousel post...');
+      
+      const containerIds = [];
+      
+      // Create containers for each image
+      for (let i = 0; i < imageUrls.length; i++) {
+        try {
+          const containerResponse = await axios.post(
+            `https://graph.facebook.com/v18.0/${instagramAccountId}/media`,
+            {
+              image_url: imageUrls[i],
+              is_carousel_item: true,
+              access_token: pageAccessToken
+            }
+          );
+
+          if (containerResponse.data?.id) {
+            containerIds.push(containerResponse.data.id);
+            console.log(`📎 Instagram image ${i + 1} container created:`, containerResponse.data.id);
+          }
+        } catch (mediaError) {
+          console.warn(`⚠️ Instagram image ${i + 1} failed:`, mediaError.message);
+        }
+      }
+
+      if (containerIds.length === 0) {
+        throw new Error('Failed to create any Instagram media containers');
+      }
+
+      // Create carousel container
+      const carouselResponse = await axios.post(
+        `https://graph.facebook.com/v18.0/${instagramAccountId}/media`,
+        {
+          media_type: 'CAROUSEL',
+          children: containerIds.join(','),
+          caption: content || '',
+          access_token: pageAccessToken
+        }
+      );
+
+      if (!carouselResponse.data?.id) {
+        throw new Error('Failed to create Instagram carousel container');
+      }
+
+      const carouselId = carouselResponse.data.id;
+
+      // Publish the carousel
+      const publishResponse = await axios.post(
+        `https://graph.facebook.com/v18.0/${instagramAccountId}/media_publish`,
+        {
+          creation_id: carouselId,
+          access_token: pageAccessToken
+        }
+      );
+
+      if (publishResponse.data?.id) {
+        return {
+          success: true,
+          platform: 'Instagram',
+          postId: publishResponse.data.id,
+          data: publishResponse.data,
+          message: `Instagram carousel with ${containerIds.length} images published successfully!`
+        };
+      }
+
+    } else {
+      throw new Error('Instagram supports maximum 10 images in a carousel');
+    }
+
+    throw new Error('Invalid response from Instagram API');
+
+  } catch (postError) {
+    console.error('❌ Instagram post failed:', {
+      message: postError.message,
+      status: postError.response?.status,
+      data: postError.response?.data
+    });
+
+    let errorMessage = 'Failed to post to Instagram';
+
+    if (postError.response?.data?.error?.message) {
+      errorMessage = postError.response.data.error.message;
+    } else if (postError.response?.data?.error?.error_user_msg) {
+      errorMessage = postError.response.data.error.error_user_msg;
+    } else if (postError.response?.status === 400) {
+      errorMessage = 'Invalid request. Check image URL and ensure it\'s publicly accessible.';
+    } else if (postError.response?.status === 403) {
+      errorMessage = 'Permission denied. Ensure Instagram account has posting permissions and is a Business/Creator account.';
+    } else if (postError.response?.status === 429) {
+      errorMessage = 'Instagram rate limit exceeded. Please try again later.';
+    } else if (postError.message) {
+      errorMessage = postError.message;
+    }
+
+    throw new Error(errorMessage);
+  }
+}
+
+// --------------------
 // INDIVIDUAL ROUTES - UPDATED FOR MULTIPLE IMAGES
 // --------------------
 router.post('/twitter', upload.array('images', 4), async (req, res) => {
@@ -584,6 +749,39 @@ router.post('/linkedin', upload.array('images', 9), async (req, res) => {
   } catch (error) {
     console.error('❌ LinkedIn route error:', error.message);
     res.status(500).json({ success: false, platform: 'LinkedIn', error: error.message });
+  }
+});
+
+router.post('/instagram', upload.array('images', 1), async (req, res) => {
+  try {
+    console.log('📥 Instagram posting route hit:', {
+      hasContent: !!req.body.content,
+      hasPageToken: !!req.body.pageAccessToken,
+      hasIgAccountId: !!req.body.instagramAccountId,
+      hasImageUrls: !!req.body.imageUrls
+    });
+
+    if (req.files && req.files.length > 0) {
+      return res.status(400).json({
+        success: false,
+        platform: 'Instagram',
+        error: 'Instagram Graph API requires image URLs, not file uploads. Please use an image URL instead.'
+      });
+    }
+
+    const imageUrls = req.body.imageUrls ? req.body.imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+
+    const result = await postToInstagram({
+      content: req.body.content,
+      pageAccessToken: req.body.pageAccessToken,
+      instagramAccountId: req.body.instagramAccountId,
+      imageUrls: imageUrls
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Instagram route error:', error.message);
+    res.status(500).json({ success: false, platform: 'Instagram', error: error.message });
   }
 });
 
@@ -653,6 +851,18 @@ router.post('/multi', upload.array('images', 10), async (req, res) => {
               pageToken: parsedCredentials.facebook.pageToken,
               imageFiles,
               imageUrls: parsedImageUrls
+            });
+            break;
+            
+          case 'instagram':
+            if (!parsedCredentials.instagram?.pageAccessToken || !parsedCredentials.instagram?.instagramAccountId) {
+              throw new Error('Instagram credentials not found');
+            }
+            result = await postToInstagram({
+              content,
+              pageAccessToken: parsedCredentials.instagram.pageAccessToken,
+              instagramAccountId: parsedCredentials.instagram.instagramAccountId,
+              imageUrls: parsedImageUrls.slice(0, 10) // Instagram max 10 images in carousel
             });
             break;
             
