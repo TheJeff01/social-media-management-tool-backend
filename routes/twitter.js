@@ -3,6 +3,8 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
+const SocialMediaAccount = require('../models/SocialMediaAccount');
 
 const oauthConfig = require('../config/oauth');
 const pkceUtils = require('../utils/pkce');
@@ -10,6 +12,23 @@ const tokenUtils = require('../utils/tokens');
 
 // Store PKCE challenges temporarily
 const pkceStore = new Map();
+
+// Authentication middleware
+const authenticateUser = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
 
 // Step 1: Initiate Twitter OAuth (same as before)
 router.get('/', (req, res) => {
@@ -107,8 +126,8 @@ router.get('/callback', async (req, res) => {
   }
 });
 
-// Step 3: Get Twitter user data (same as before)
-router.get('/user/:sessionId', (req, res) => {
+// Step 3: Get Twitter user data and save to database
+router.get('/user/:sessionId', authenticateUser, async (req, res) => {
   const { sessionId } = req.params;
   const tokens = tokenUtils.getTokens(sessionId);
 
@@ -116,16 +135,54 @@ router.get('/user/:sessionId', (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  // Return user data and clean up session
-  const userData = {
-    platform: 'twitter',
-    user: tokens.user,
-    accessToken: tokens.accessToken,
-    timestamp: tokens.timestamp
-  };
+  try {
+    const { userId } = req;
+    const { accessToken, refreshToken, user } = tokens;
 
-  tokenUtils.removeTokens(sessionId);
-  res.json(userData);
+    // Save or update Twitter account in database
+    const existingAccount = await SocialMediaAccount.findOne({
+      userId: userId,
+      platform: 'twitter',
+      accountId: user.id
+    });
+
+    if (existingAccount) {
+      // Update existing account
+      existingAccount.accountName = user.name;
+      existingAccount.accessToken = accessToken;
+      existingAccount.refreshToken = refreshToken;
+      existingAccount.lastUsed = new Date();
+      await existingAccount.save();
+    } else {
+      // Create new account
+      const socialAccount = new SocialMediaAccount({
+        userId: userId,
+        platform: 'twitter',
+        accountName: user.name,
+        accountId: user.id,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        isActive: true
+      });
+      await socialAccount.save();
+    }
+
+    // Return user data and clean up session
+    const userData = {
+      platform: 'twitter',
+      user: user,
+      accessToken: accessToken,
+      timestamp: tokens.timestamp
+    };
+
+    tokenUtils.removeTokens(sessionId);
+    res.json(userData);
+
+  } catch (error) {
+    console.error('Error saving Twitter account:', error);
+    tokenUtils.removeTokens(sessionId);
+    res.status(500).json({ error: 'Failed to save Twitter account' });
+  }
 });
 
 module.exports = router;

@@ -2,10 +2,29 @@ const express = require('express');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
+const SocialMediaAccount = require('../models/SocialMediaAccount');
 
 const oauthConfig = require('../config/oauth');
 const pkceUtils = require('../utils/pkce');
 const tokenUtils = require('../utils/tokens');
+
+// Authentication middleware
+const authenticateUser = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
 
 // Step 1: Initiate Instagram OAuth (via Facebook)
 router.get('/', (req, res) => {
@@ -152,8 +171,8 @@ router.get('/callback', async (req, res) => {
   }
 });
 
-// Step 3: Get Instagram user data
-router.get('/user/:sessionId', (req, res) => {
+// Step 3: Get Instagram user data and save to database
+router.get('/user/:sessionId', authenticateUser, async (req, res) => {
   const { sessionId } = req.params;
   const tokens = tokenUtils.getTokens(sessionId);
 
@@ -161,18 +180,64 @@ router.get('/user/:sessionId', (req, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  // Prepare response data
-  const responseData = {
-    platform: 'instagram',
-    user: tokens.user,
-    instagramAccounts: tokens.instagramAccounts,
-    accessToken: tokens.accessToken,
-    timestamp: tokens.timestamp
-  };
+  try {
+    const { userId } = req;
+    const { accessToken, user, instagramAccounts } = tokens;
 
-  // Clean up session after use
-  tokenUtils.removeTokens(sessionId);
-  res.json(responseData);
+    // Save or update Instagram account in database
+    if (instagramAccounts.length > 0) {
+      const igAccount = instagramAccounts[0]; // Use the first Instagram account
+      
+      const existingAccount = await SocialMediaAccount.findOne({
+        userId: userId,
+        platform: 'instagram',
+        accountId: igAccount.id
+      });
+
+      if (existingAccount) {
+        // Update existing account
+        existingAccount.accountName = igAccount.name || igAccount.username;
+        existingAccount.accessToken = igAccount.page_access_token; // Use page access token for posting
+        existingAccount.instagramAccountId = igAccount.id;
+        existingAccount.pageId = igAccount.page_id;
+        existingAccount.pageName = igAccount.page_name;
+        existingAccount.lastUsed = new Date();
+        await existingAccount.save();
+      } else {
+        // Create new account
+        const socialAccount = new SocialMediaAccount({
+          userId: userId,
+          platform: 'instagram',
+          accountName: igAccount.name || igAccount.username,
+          accountId: igAccount.id,
+          accessToken: igAccount.page_access_token, // Use page access token for posting
+          instagramAccountId: igAccount.id,
+          pageId: igAccount.page_id,
+          pageName: igAccount.page_name,
+          isActive: true
+        });
+        await socialAccount.save();
+      }
+    }
+
+    // Prepare response data
+    const responseData = {
+      platform: 'instagram',
+      user: user,
+      instagramAccounts: instagramAccounts,
+      accessToken: accessToken,
+      timestamp: tokens.timestamp
+    };
+
+    // Clean up session after use
+    tokenUtils.removeTokens(sessionId);
+    res.json(responseData);
+
+  } catch (error) {
+    console.error('Error saving Instagram account:', error);
+    tokenUtils.removeTokens(sessionId);
+    res.status(500).json({ error: 'Failed to save Instagram account' });
+  }
 });
 
 module.exports = router;

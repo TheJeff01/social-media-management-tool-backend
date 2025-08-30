@@ -2,9 +2,28 @@ const express = require("express");
 const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
 const router = express.Router();
+const jwt = require('jsonwebtoken');
+const SocialMediaAccount = require('../models/SocialMediaAccount');
 
 const oauthConfig = require("../config/oauth");
 const tokenUtils = require("../utils/tokens");
+
+// Authentication middleware
+const authenticateUser = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
 
 // --- Helper: Retry wrapper for LinkedIn API ---
 async function apiCallWithRetry(url, options, retries = 3) {
@@ -132,8 +151,8 @@ router.get("/callback", async (req, res) => {
   }
 });
 
-// --- Step 3: Retrieve user data using session ID ---
-router.get("/user/:sessionId", (req, res) => {
+// --- Step 3: Retrieve user data using session ID and save to database ---
+router.get("/user/:sessionId", authenticateUser, async (req, res) => {
   const { sessionId } = req.params;
   console.log("Fetching user data for session:", sessionId);
 
@@ -144,17 +163,55 @@ router.get("/user/:sessionId", (req, res) => {
     return res.status(404).json({ error: "Session not found or invalid" });
   }
 
-  const responseData = {
-    platform: "linkedin",
-    user: tokens.user,
-    accessToken: tokens.accessToken,
-    timestamp: tokens.timestamp,
-  };
+  try {
+    const { userId } = req;
+    const { accessToken, user } = tokens;
 
-  // Optional: Remove session after one-time use
-  tokenUtils.removeTokens(sessionId);
+    // Save or update LinkedIn account in database
+    const existingAccount = await SocialMediaAccount.findOne({
+      userId: userId,
+      platform: 'linkedin',
+      accountId: user.id
+    });
 
-  res.json(responseData);
+    if (existingAccount) {
+      // Update existing account
+      existingAccount.accountName = user.name;
+      existingAccount.accessToken = accessToken;
+      existingAccount.linkedinUserId = user.id;
+      existingAccount.lastUsed = new Date();
+      await existingAccount.save();
+    } else {
+      // Create new account
+      const socialAccount = new SocialMediaAccount({
+        userId: userId,
+        platform: 'linkedin',
+        accountName: user.name,
+        accountId: user.id,
+        accessToken: accessToken,
+        linkedinUserId: user.id,
+        isActive: true
+      });
+      await socialAccount.save();
+    }
+
+    const responseData = {
+      platform: "linkedin",
+      user: user,
+      accessToken: accessToken,
+      timestamp: tokens.timestamp,
+    };
+
+    // Remove session after one-time use
+    tokenUtils.removeTokens(sessionId);
+
+    res.json(responseData);
+
+  } catch (error) {
+    console.error('Error saving LinkedIn account:', error);
+    tokenUtils.removeTokens(sessionId);
+    res.status(500).json({ error: 'Failed to save LinkedIn account' });
+  }
 });
 
 // --- Step 4: Post to LinkedIn ---

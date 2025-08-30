@@ -2,10 +2,29 @@ const express = require("express");
 const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
 const router = express.Router();
+const jwt = require('jsonwebtoken');
+const SocialMediaAccount = require('../models/SocialMediaAccount');
 
 const oauthConfig = require("../config/oauth");
 const pkceUtils = require("../utils/pkce");
 const tokenUtils = require("../utils/tokens");
+
+// Authentication middleware
+const authenticateUser = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
 
 // Step 1: Initiate Facebook OAuth
 router.get("/", (req, res) => {
@@ -97,10 +116,10 @@ router.get("/callback", async (req, res) => {
     );
     res.redirect(`/facebook-callback.html?error=token_exchange_failed`);
   }
-});                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+});
 
-// Step 3: Get Facebook user data
-router.get("/user/:sessionId", (req, res) => {
+// Step 3: Get Facebook user data and save to database
+router.get("/user/:sessionId", authenticateUser, async (req, res) => {
   const { sessionId } = req.params;
   const tokens = tokenUtils.getTokens(sessionId);
 
@@ -108,17 +127,88 @@ router.get("/user/:sessionId", (req, res) => {
     return res.status(404).json({ error: "Session not found" });
   }
 
-  // Return user data and clean up session
-  const userData = {
-    platform: "facebook",
-    user: tokens.user,
-    pages: tokens.pages,
-    accessToken: tokens.accessToken,
-    timestamp: tokens.timestamp,
-  };
+  try {
+    const { userId } = req;
+    const { accessToken, user, pages } = tokens;
 
-  tokenUtils.removeTokens(sessionId);
-  res.json(userData);
+    // Save or update Facebook account in database
+    if (pages.length > 0) {
+      // Use the first page for posting
+      const page = pages[0];
+      
+      const existingAccount = await SocialMediaAccount.findOne({
+        userId: userId,
+        platform: 'facebook',
+        accountId: page.id
+      });
+
+      if (existingAccount) {
+        // Update existing account
+        existingAccount.accountName = page.name;
+        existingAccount.accessToken = page.access_token; // Use page access token
+        existingAccount.pageId = page.id;
+        existingAccount.pageName = page.name;
+        existingAccount.lastUsed = new Date();
+        await existingAccount.save();
+      } else {
+        // Create new account
+        const socialAccount = new SocialMediaAccount({
+          userId: userId,
+          platform: 'facebook',
+          accountName: page.name,
+          accountId: page.id,
+          accessToken: page.access_token, // Use page access token
+          pageId: page.id,
+          pageName: page.name,
+          isActive: true
+        });
+        await socialAccount.save();
+      }
+    } else {
+      // No pages, use personal profile
+      const existingAccount = await SocialMediaAccount.findOne({
+        userId: userId,
+        platform: 'facebook',
+        accountId: user.id
+      });
+
+      if (existingAccount) {
+        // Update existing account
+        existingAccount.accountName = user.name;
+        existingAccount.accessToken = accessToken;
+        existingAccount.lastUsed = new Date();
+        await existingAccount.save();
+      } else {
+        // Create new account
+        const socialAccount = new SocialMediaAccount({
+          userId: userId,
+          platform: 'facebook',
+          accountName: user.name,
+          accountId: user.id,
+          accessToken: accessToken,
+          isActive: true
+        });
+        await socialAccount.save();
+      }
+    }
+
+    // Return user data and clean up session
+    const userData = {
+      platform: "facebook",
+      user: user,
+      pages: pages,
+      accessToken: accessToken,
+      timestamp: tokens.timestamp,
+    };
+
+    tokenUtils.removeTokens(sessionId);
+    res.json(userData);
+
+  } catch (error) {
+    console.error('Error saving Facebook account:', error);
+    tokenUtils.removeTokens(sessionId);
+    res.status(500).json({ error: 'Failed to save Facebook account' });
+  }
 });
 
 module.exports = router;
