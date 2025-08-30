@@ -3,7 +3,7 @@ const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
 const router = express.Router();
-const cloudinary = require('cloudinary').v2; // ✅ Added
+const cloudinary = require('cloudinary').v2;
 
 // --------------------
 // CLOUDINARY CONFIGURATION
@@ -17,31 +17,32 @@ cloudinary.config({
 // --------------------
 // HELPER: Convert uploaded files to Cloudinary URLs
 // --------------------
-async function convertFilesToCloudinaryUrls(imageFiles) {
-  const imageUrls = [];
+async function convertFilesToCloudinaryUrls(imageFiles, videoFiles) {
+  const mediaUrls = [];
   
+  // Process image files
   for (let i = 0; i < imageFiles.length; i++) {
     const file = imageFiles[i];
     
     try {
-      console.log(`☁️ Uploading ${file.originalname} to Cloudinary...`);
+      console.log(`☁️ Uploading image ${file.originalname} to Cloudinary...`);
       
       const result = await new Promise((resolve, reject) => {
         cloudinary.uploader.upload_stream(
           {
             resource_type: 'image',
-            folder: 'instagram-posts',
+            folder: 'social-media-posts/images',
             format: 'jpg',
             quality: 'auto:good',
             fetch_format: 'auto',
             transformation: [
-              { width: 1080, height: 1080, crop: 'limit' }, // Optimal for Instagram
+              { width: 1080, height: 1080, crop: 'limit' },
               { quality: 'auto:good' }
             ]
           },
           (error, result) => {
             if (error) {
-              console.error('❌ Cloudinary upload error:', error);
+              console.error('❌ Cloudinary image upload error:', error);
               reject(error);
             } else {
               resolve(result);
@@ -50,17 +51,64 @@ async function convertFilesToCloudinaryUrls(imageFiles) {
         ).end(file.buffer);
       });
       
-      imageUrls.push(result.secure_url);
-      console.log(`✅ Cloudinary upload successful: ${result.secure_url}`);
+      mediaUrls.push({
+        url: result.secure_url,
+        type: 'image',
+        public_id: result.public_id
+      });
+      console.log(`✅ Image upload successful: ${result.secure_url}`);
       console.log(`📊 Image details: ${result.width}x${result.height}, ${result.format}, ${result.bytes} bytes`);
       
     } catch (error) {
-      console.error(`❌ Cloudinary upload failed for ${file.originalname}:`, error.message);
-      // Continue processing other files
+      console.error(`❌ Cloudinary image upload failed for ${file.originalname}:`, error.message);
     }
   }
   
-  return imageUrls;
+  // Process video files
+  for (let i = 0; i < videoFiles.length; i++) {
+    const file = videoFiles[i];
+    
+    try {
+      console.log(`🎬 Uploading video ${file.originalname} to Cloudinary...`);
+      
+      const result = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload_stream(
+          {
+            resource_type: 'video',
+            folder: 'social-media-posts/videos',
+            quality: 'auto:good',
+            format: 'mp4',
+            transformation: [
+              { width: 1920, height: 1080, crop: 'limit', quality: 'auto:good' },
+              { video_codec: 'h264', audio_codec: 'aac' }
+            ]
+          },
+          (error, result) => {
+            if (error) {
+              console.error('❌ Cloudinary video upload error:', error);
+              reject(error);
+            } else {
+              resolve(result);
+            }
+          }
+        ).end(file.buffer);
+      });
+      
+      mediaUrls.push({
+        url: result.secure_url,
+        type: 'video',
+        public_id: result.public_id,
+        duration: result.duration
+      });
+      console.log(`✅ Video upload successful: ${result.secure_url}`);
+      console.log(`📊 Video details: ${result.width}x${result.height}, ${result.duration}s, ${result.bytes} bytes`);
+      
+    } catch (error) {
+      console.error(`❌ Cloudinary video upload failed for ${file.originalname}:`, error.message);
+    }
+  }
+  
+  return mediaUrls;
 }
 
 // --------------------
@@ -74,60 +122,68 @@ function httpError(message, status, retryAfter) {
 }
 
 // --------------------
-// MULTER CONFIGURATION
+// MULTER CONFIGURATION (Updated for video support)
 // --------------------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB per file
+  limits: { 
+    fileSize: 5 * 1024 * 1024 * 1024, // 5GB max file size
+    files: 20 // Max 20 files total
+  },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
-    else cb(new Error('Only image files are allowed'), false);
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image and video files are allowed'), false);
+    }
   }
 });
 
 // --------------------
-// LINKEDIN HELPERS - (unchanged)
+// LINKEDIN HELPERS - Updated for video
 // --------------------
-async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
-  console.log('💼 Starting LinkedIn media upload...');
+async function uploadLinkedInMedia(mediaFile, mediaUrl, accessToken, userId, isVideo = false) {
+  console.log(`💼 Starting LinkedIn ${isVideo ? 'video' : 'image'} upload...`);
   
   let mediaBuffer, contentType, filename;
 
-  if (imageFile) {
-    mediaBuffer = imageFile.buffer;
-    contentType = imageFile.mimetype;
-    filename = imageFile.originalname || 'image.jpg';
-    console.log('📁 Using uploaded file for LinkedIn:', { size: mediaBuffer.length, type: contentType, filename });
-  } else if (imageUrl && imageUrl.trim()) {
-    console.log('🔗 Fetching image from URL for LinkedIn:', imageUrl);
+  if (mediaFile) {
+    mediaBuffer = mediaFile.buffer;
+    contentType = mediaFile.mimetype;
+    filename = mediaFile.originalname || `${isVideo ? 'video' : 'image'}.${isVideo ? 'mp4' : 'jpg'}`;
+    console.log(`📁 Using uploaded file for LinkedIn:`, { size: mediaBuffer.length, type: contentType, filename });
+  } else if (mediaUrl && mediaUrl.trim()) {
+    console.log(`🔗 Fetching ${isVideo ? 'video' : 'image'} from URL for LinkedIn:`, mediaUrl);
     try {
-      const imageResponse = await axios.get(imageUrl, { 
+      const mediaResponse = await axios.get(mediaUrl, { 
         responseType: 'arraybuffer',
-        timeout: 10000,
-        maxContentLength: 5 * 1024 * 1024,
+        timeout: 30000,
+        maxContentLength: 5 * 1024 * 1024 * 1024, // 5GB for videos
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SocialMediaBot/1.0)' }
       });
-      mediaBuffer = Buffer.from(imageResponse.data);
-      contentType = imageResponse.headers['content-type'] || 'image/jpeg';
-      const urlParts = imageUrl.split('/');
-      filename = urlParts[urlParts.length - 1] || 'image.jpg';
-      console.log('✅ Image fetched for LinkedIn:', { size: mediaBuffer.length, type: contentType, filename });
+      mediaBuffer = Buffer.from(mediaResponse.data);
+      contentType = mediaResponse.headers['content-type'] || (isVideo ? 'video/mp4' : 'image/jpeg');
+      const urlParts = mediaUrl.split('/');
+      filename = urlParts[urlParts.length - 1] || `${isVideo ? 'video' : 'image'}.${isVideo ? 'mp4' : 'jpg'}`;
+      console.log(`✅ ${isVideo ? 'Video' : 'Image'} fetched for LinkedIn:`, { size: mediaBuffer.length, type: contentType, filename });
     } catch (fetchError) {
-      console.error('❌ Failed to fetch image for LinkedIn:', fetchError.message);
-      throw new Error(`Failed to fetch image: ${fetchError.message}`);
+      console.error(`❌ Failed to fetch ${isVideo ? 'video' : 'image'} for LinkedIn:`, fetchError.message);
+      throw new Error(`Failed to fetch ${isVideo ? 'video' : 'image'}: ${fetchError.message}`);
     }
   } else {
-    throw new Error('No image file or URL provided for LinkedIn');
+    throw new Error(`No ${isVideo ? 'video' : 'image'} file or URL provided for LinkedIn`);
   }
 
   if (!mediaBuffer || mediaBuffer.length === 0) {
-    throw new Error('Empty image buffer for LinkedIn');
+    throw new Error(`Empty ${isVideo ? 'video' : 'image'} buffer for LinkedIn`);
   }
 
   try {
+    const recipe = isVideo ? 'urn:li:digitalmediaRecipe:feedshare-video' : 'urn:li:digitalmediaRecipe:feedshare-image';
+    
     const initializePayload = {
       registerUploadRequest: {
-        recipes: ['urn:li:digitalmediaRecipe:feedshare-image'],
+        recipes: [recipe],
         owner: `urn:li:person:${userId}`,
         serviceRelationships: [
           { relationshipType: 'OWNER', identifier: 'urn:li:userGeneratedContent' }
@@ -149,13 +205,13 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
     );
 
     if (!initResponse.data?.value?.uploadMechanism?.['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']) {
-      throw new Error('LinkedIn upload initialization failed - no upload URL received');
+      throw new Error(`LinkedIn ${isVideo ? 'video' : 'image'} upload initialization failed - no upload URL received`);
     }
 
     const uploadUrl = initResponse.data.value.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
     const asset = initResponse.data.value.asset;
 
-    console.log('✅ LinkedIn upload initialized:', { asset, uploadUrl: uploadUrl.substring(0, 50) + '...' });
+    console.log(`✅ LinkedIn ${isVideo ? 'video' : 'image'} upload initialized:`, { asset, uploadUrl: uploadUrl.substring(0, 50) + '...' });
 
     const uploadResponse = await axios.put(
       uploadUrl,
@@ -165,20 +221,20 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
           'Content-Type': 'application/octet-stream',
           'Authorization': `Bearer ${accessToken}`
         },
-        timeout: 60000,
-        maxContentLength: 10 * 1024 * 1024
+        timeout: isVideo ? 300000 : 60000, // 5 minutes for videos, 1 minute for images
+        maxContentLength: 5 * 1024 * 1024 * 1024
       }
     );
 
     if (uploadResponse.status !== 201 && uploadResponse.status !== 200) {
-      throw new Error(`LinkedIn binary upload failed with status: ${uploadResponse.status}`);
+      throw new Error(`LinkedIn ${isVideo ? 'video' : 'image'} binary upload failed with status: ${uploadResponse.status}`);
     }
 
-    console.log('✅ LinkedIn binary upload successful');
+    console.log(`✅ LinkedIn ${isVideo ? 'video' : 'image'} binary upload successful`);
     return asset;
 
   } catch (uploadError) {
-    console.error('❌ LinkedIn media upload failed:', {
+    console.error(`❌ LinkedIn ${isVideo ? 'video' : 'image'} upload failed:`, {
       message: uploadError.message,
       status: uploadError.response?.status,
       statusText: uploadError.response?.statusText,
@@ -188,17 +244,18 @@ async function uploadLinkedInMedia(imageFile, imageUrl, accessToken, userId) {
     const errorMessage = uploadError.response?.data?.message || 
                         uploadError.response?.data?.error || 
                         uploadError.message || 
-                        'LinkedIn media upload failed';
+                        `LinkedIn ${isVideo ? 'video' : 'image'} upload failed`;
     const retryAfter = uploadError.response?.headers?.['retry-after'];
-    throw httpError(`LinkedIn media upload failed: ${errorMessage}`, uploadError.response?.status || 500, retryAfter);
+    throw httpError(`LinkedIn ${isVideo ? 'video' : 'image'} upload failed: ${errorMessage}`, uploadError.response?.status || 500, retryAfter);
   }
 }
 
-async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], imageUrls = [] }) {
+async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], videoFiles = [], mediaUrls = [] }) {
   console.log('💼 Starting LinkedIn post:', {
     hasContent: !!content,
     imageFileCount: imageFiles.length,
-    imageUrlCount: imageUrls.length,
+    videoFileCount: videoFiles.length,
+    mediaUrlCount: mediaUrls.length,
     contentLength: content?.length || 0
   });
 
@@ -206,25 +263,39 @@ async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], i
     throw new Error('LinkedIn access token and user ID are required');
   }
 
-  if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
-    throw new Error('Either content or images are required for LinkedIn posts');
+  if (!content && imageFiles.length === 0 && videoFiles.length === 0 && mediaUrls.length === 0) {
+    throw new Error('Either content or media are required for LinkedIn posts');
   }
 
   let mediaAssets = [];
   
+  // Upload image files
   for (let i = 0; i < imageFiles.length; i++) {
     try {
-      const asset = await uploadLinkedInMedia(imageFiles[i], null, accessToken, userId);
+      const asset = await uploadLinkedInMedia(imageFiles[i], null, accessToken, userId, false);
       mediaAssets.push(asset);
-      console.log(`📎 LinkedIn file ${i + 1} uploaded successfully, asset:`, asset);
+      console.log(`📎 LinkedIn image file ${i + 1} uploaded successfully, asset:`, asset);
     } catch (mediaError) {
-      console.warn(`⚠️ LinkedIn file ${i + 1} upload failed:`, mediaError.message);
+      console.warn(`⚠️ LinkedIn image file ${i + 1} upload failed:`, mediaError.message);
     }
   }
 
-  for (let i = 0; i < imageUrls.length; i++) {
+  // Upload video files
+  for (let i = 0; i < videoFiles.length; i++) {
     try {
-      const asset = await uploadLinkedInMedia(null, imageUrls[i], accessToken, userId);
+      const asset = await uploadLinkedInMedia(videoFiles[i], null, accessToken, userId, true);
+      mediaAssets.push(asset);
+      console.log(`📎 LinkedIn video file ${i + 1} uploaded successfully, asset:`, asset);
+    } catch (mediaError) {
+      console.warn(`⚠️ LinkedIn video file ${i + 1} upload failed:`, mediaError.message);
+    }
+  }
+
+  // Upload media from URLs
+  for (let i = 0; i < mediaUrls.length; i++) {
+    try {
+      const isVideoUrl = /\.(mp4|mov|avi|wmv|flv|webm|m4v)(\?|$)/i.test(mediaUrls[i]);
+      const asset = await uploadLinkedInMedia(null, mediaUrls[i], accessToken, userId, isVideoUrl);
       mediaAssets.push(asset);
       console.log(`📎 LinkedIn URL ${i + 1} uploaded successfully, asset:`, asset);
     } catch (mediaError) {
@@ -240,7 +311,7 @@ async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], i
         shareCommentary: {
           text: content || ' '
         },
-        shareMediaCategory: mediaAssets.length > 0 ? "IMAGE" : "NONE"
+        shareMediaCategory: mediaAssets.length > 0 ? (videoFiles.length > 0 || mediaUrls.some(url => /\.(mp4|mov|avi|wmv|flv|webm|m4v)(\?|$)/i.test(url)) ? "VIDEO" : "IMAGE") : "NONE"
       }
     },
     visibility: {
@@ -251,9 +322,9 @@ async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], i
   if (mediaAssets.length > 0) {
     postPayload.specificContent["com.linkedin.ugc.ShareContent"].media = mediaAssets.map((asset, index) => ({
       status: "READY",
-      description: { text: `Image ${index + 1}` },
+      description: { text: `Media ${index + 1}` },
       media: asset,
-      title: { text: `Image ${index + 1}` }
+      title: { text: `Media ${index + 1}` }
     }));
   }
 
@@ -273,7 +344,7 @@ async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], i
           'Content-Type': 'application/json',
           'X-Restli-Protocol-Version': '2.0.0'
         },
-        timeout: 15000
+        timeout: 30000
       }
     );
 
@@ -288,7 +359,7 @@ async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], i
         platform: 'LinkedIn',
         postId: response.data.id,
         data: response.data,
-        message: `LinkedIn post with ${mediaAssets.length} image${mediaAssets.length !== 1 ? 's' : ''} published successfully!`
+        message: `LinkedIn post with ${mediaAssets.length} media file${mediaAssets.length !== 1 ? 's' : ''} published successfully!`
       };
     } else {
       throw new Error('Invalid response from LinkedIn API - no post ID returned');
@@ -320,35 +391,35 @@ async function postToLinkedIn({ content, accessToken, userId, imageFiles = [], i
 }
 
 // --------------------
-// TWITTER HELPERS - (unchanged)
+// TWITTER HELPERS - Updated for video
 // --------------------
-async function uploadTwitterMedia(imageFile, imageUrl, accessToken) {
-  console.log('🐦 Starting Twitter media upload...');
+async function uploadTwitterMedia(mediaFile, mediaUrl, accessToken, isVideo = false) {
+  console.log(`🐦 Starting Twitter ${isVideo ? 'video' : 'image'} upload...`);
   
   let mediaBuffer, contentType, filename;
 
-  if (imageFile) {
-    mediaBuffer = imageFile.buffer;
-    contentType = imageFile.mimetype;
-    filename = imageFile.originalname || 'image.jpg';
-  } else if (imageUrl && imageUrl.trim()) {
-    const imageResponse = await axios.get(imageUrl, { 
+  if (mediaFile) {
+    mediaBuffer = mediaFile.buffer;
+    contentType = mediaFile.mimetype;
+    filename = mediaFile.originalname || `${isVideo ? 'video' : 'image'}.${isVideo ? 'mp4' : 'jpg'}`;
+  } else if (mediaUrl && mediaUrl.trim()) {
+    const mediaResponse = await axios.get(mediaUrl, { 
       responseType: 'arraybuffer',
-      timeout: 10000,
-      maxContentLength: 5 * 1024 * 1024
+      timeout: 30000,
+      maxContentLength: 512 * 1024 * 1024 // 512MB max for Twitter
     });
     
-    mediaBuffer = Buffer.from(imageResponse.data);
-    contentType = imageResponse.headers['content-type'] || 'image/jpeg';
-    const urlParts = imageUrl.split('/');
-    filename = urlParts[urlParts.length - 1] || 'image.jpg';
+    mediaBuffer = Buffer.from(mediaResponse.data);
+    contentType = mediaResponse.headers['content-type'] || (isVideo ? 'video/mp4' : 'image/jpeg');
+    const urlParts = mediaUrl.split('/');
+    filename = urlParts[urlParts.length - 1] || `${isVideo ? 'video' : 'image'}.${isVideo ? 'mp4' : 'jpg'}`;
   }
 
-  if (!mediaBuffer) throw new Error('No media buffer available');
+  if (!mediaBuffer) throw new Error(`No ${isVideo ? 'video' : 'image'} buffer available`);
 
   const formData = new FormData();
   formData.append('media', mediaBuffer, { filename, contentType });
-  formData.append('media_category', 'tweet_image');
+  formData.append('media_category', isVideo ? 'tweet_video' : 'tweet_image');
 
   const uploadResponse = await axios.post(
     'https://upload.twitter.com/1.1/media/upload.json',
@@ -358,42 +429,63 @@ async function uploadTwitterMedia(imageFile, imageUrl, accessToken) {
         'Authorization': `Bearer ${accessToken}`,
         ...formData.getHeaders()
       },
-      timeout: 30000
+      timeout: isVideo ? 300000 : 30000 // 5 minutes for videos, 30 seconds for images
     }
   );
 
   if (uploadResponse.data && uploadResponse.data.media_id_string) {
     return uploadResponse.data.media_id_string;
   } else {
-    throw new Error('Failed to get media ID from Twitter');
+    throw new Error(`Failed to get media ID from Twitter for ${isVideo ? 'video' : 'image'}`);
   }
 }
 
-async function postToTwitter({ content, accessToken, imageFiles = [], imageUrls = [] }) {
+async function postToTwitter({ content, accessToken, imageFiles = [], videoFiles = [], mediaUrls = [] }) {
   if (!accessToken) throw httpError('Twitter access token required', 400);
-  if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
-    throw httpError('Content or images required', 400);
+  if (!content && imageFiles.length === 0 && videoFiles.length === 0 && mediaUrls.length === 0) {
+    throw httpError('Content or media required', 400);
   }
 
   try {
     let mediaIds = [];
-    const allImages = [...imageFiles, ...imageUrls];
-    const maxImages = Math.min(allImages.length, 4);
+    const maxMedia = 4; // Twitter limit
+    let processedCount = 0;
 
-    for (let i = 0; i < Math.min(imageFiles.length, maxImages); i++) {
+    // Process image files (up to 4 total)
+    for (let i = 0; i < Math.min(imageFiles.length, maxMedia - processedCount); i++) {
       try {
-        const mediaId = await uploadTwitterMedia(imageFiles[i], null, accessToken);
+        const mediaId = await uploadTwitterMedia(imageFiles[i], null, accessToken, false);
         mediaIds.push(mediaId);
+        processedCount++;
       } catch (err) {
-        console.warn(`⚠️ Twitter file ${i + 1} upload failed:`, err.message);
+        console.warn(`⚠️ Twitter image file ${i + 1} upload failed:`, err.message);
       }
     }
 
-    const remainingSlots = maxImages - mediaIds.length;
-    for (let i = 0; i < Math.min(imageUrls.length, remainingSlots); i++) {
+    // Process video files (Twitter supports 1 video OR up to 4 images)
+    for (let i = 0; i < Math.min(videoFiles.length, 1); i++) {
+      if (processedCount === 0) { // Only add video if no images were added
+        try {
+          const mediaId = await uploadTwitterMedia(videoFiles[i], null, accessToken, true);
+          mediaIds.push(mediaId);
+          processedCount++;
+          break; // Twitter only supports 1 video per tweet
+        } catch (err) {
+          console.warn(`⚠️ Twitter video file ${i + 1} upload failed:`, err.message);
+        }
+      }
+    }
+
+    // Process URLs (remaining slots)
+    const remainingSlots = maxMedia - processedCount;
+    for (let i = 0; i < Math.min(mediaUrls.length, remainingSlots); i++) {
       try {
-        const mediaId = await uploadTwitterMedia(null, imageUrls[i], accessToken);
+        const isVideoUrl = /\.(mp4|mov|avi|wmv|flv|webm|m4v)(\?|$)/i.test(mediaUrls[i]);
+        if (isVideoUrl && mediaIds.length > 0) continue; // Skip if already have media (Twitter: 1 video OR multiple images)
+        
+        const mediaId = await uploadTwitterMedia(null, mediaUrls[i], accessToken, isVideoUrl);
         mediaIds.push(mediaId);
+        if (isVideoUrl) break; // Only one video allowed
       } catch (err) {
         console.warn(`⚠️ Twitter URL ${i + 1} upload failed:`, err.message);
       }
@@ -417,7 +509,7 @@ async function postToTwitter({ content, accessToken, imageFiles = [], imageUrls 
         platform: 'Twitter',
         postId: response.data.data.id,
         data: response.data.data,
-        message: `Tweet with ${mediaIds.length} image${mediaIds.length !== 1 ? 's' : ''} posted successfully!`
+        message: `Tweet with ${mediaIds.length} media file${mediaIds.length !== 1 ? 's' : ''} posted successfully!`
       };
     }
     throw httpError('Invalid response from Twitter API', 502);
@@ -436,18 +528,67 @@ async function postToTwitter({ content, accessToken, imageFiles = [], imageUrls 
 }
 
 // --------------------
-// FACEBOOK HELPERS - (unchanged)
+// FACEBOOK HELPERS - Updated for video
 // --------------------
-async function postToFacebook({ content, pageId, pageToken, imageFiles = [], imageUrls = [] }) {
+async function postToFacebook({ content, pageId, pageToken, imageFiles = [], videoFiles = [], mediaUrls = [] }) {
   if (!pageId || !pageToken) throw httpError('Facebook page ID and token required', 400);
-  if (!content && imageFiles.length === 0 && imageUrls.length === 0) {
-    throw httpError('Content or images required', 400);
+  if (!content && imageFiles.length === 0 && videoFiles.length === 0 && mediaUrls.length === 0) {
+    throw httpError('Content or media required', 400);
   }
 
   try {
-    const allImages = [...imageFiles, ...imageUrls];
+    const allImageFiles = imageFiles;
+    const allVideoFiles = videoFiles;
+    const imageUrls = mediaUrls.filter(url => !/\.(mp4|mov|avi|wmv|flv|webm|m4v)(\?|$)/i.test(url));
+    const videoUrls = mediaUrls.filter(url => /\.(mp4|mov|avi|wmv|flv|webm|m4v)(\?|$)/i.test(url));
     
-    if (allImages.length === 0) {
+    // Handle single video post
+    if (allVideoFiles.length === 1 && allImageFiles.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
+      const formData = new FormData();
+      formData.append('source', allVideoFiles[0].buffer, {
+        filename: allVideoFiles[0].originalname,
+        contentType: allVideoFiles[0].mimetype
+      });
+      formData.append('description', content || '');
+      formData.append('access_token', pageToken);
+
+      const response = await axios.post(`https://graph.facebook.com/${pageId}/videos`, formData, {
+        headers: formData.getHeaders(),
+        timeout: 300000 // 5 minutes for video upload
+      });
+
+      if (response.data?.id) {
+        return {
+          success: true,
+          platform: 'Facebook',
+          postId: response.data.id,
+          data: response.data,
+          message: 'Facebook video post published successfully!'
+        };
+      }
+    }
+    
+    // Handle single video URL post
+    if (videoUrls.length === 1 && allVideoFiles.length === 0 && allImageFiles.length === 0 && imageUrls.length === 0) {
+      const response = await axios.post(`https://graph.facebook.com/${pageId}/videos`, {
+        file_url: videoUrls[0],
+        description: content || '',
+        access_token: pageToken
+      });
+
+      if (response.data?.id) {
+        return {
+          success: true,
+          platform: 'Facebook',
+          postId: response.data.id,
+          data: response.data,
+          message: 'Facebook video post published successfully!'
+        };
+      }
+    }
+
+    // Handle text-only post
+    if (allImageFiles.length === 0 && allVideoFiles.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
       const response = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
         message: content,
         access_token: pageToken
@@ -462,27 +603,21 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], ima
           message: 'Facebook post published successfully!'
         };
       }
-    } else if (allImages.length === 1) {
-      let response;
-      if (imageFiles.length > 0) {
-        const formData = new FormData();
-        formData.append('source', imageFiles[0].buffer, {
-          filename: imageFiles[0].originalname,
-          contentType: imageFiles[0].mimetype
-        });
-        formData.append('caption', content || '');
-        formData.append('access_token', pageToken);
+    }
+    
+    // Handle single image post
+    else if (allImageFiles.length === 1 && allVideoFiles.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
+      const formData = new FormData();
+      formData.append('source', allImageFiles[0].buffer, {
+        filename: allImageFiles[0].originalname,
+        contentType: allImageFiles[0].mimetype
+      });
+      formData.append('caption', content || '');
+      formData.append('access_token', pageToken);
 
-        response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, formData, {
-          headers: formData.getHeaders()
-        });
-      } else {
-        response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
-          url: imageUrls[0],
-          caption: content || '',
-          access_token: pageToken
-        });
-      }
+      const response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, formData, {
+        headers: formData.getHeaders()
+      });
 
       if (response.data?.id) {
         return {
@@ -490,18 +625,41 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], ima
           platform: 'Facebook',
           postId: response.data.id,
           data: response.data,
-          message: 'Facebook post with image published successfully!'
+          message: 'Facebook image post published successfully!'
         };
       }
-    } else {
+    }
+    
+    // Handle single image URL post
+    else if (imageUrls.length === 1 && allImageFiles.length === 0 && allVideoFiles.length === 0 && videoUrls.length === 0) {
+      const response = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
+        url: imageUrls[0],
+        caption: content || '',
+        access_token: pageToken
+      });
+
+      if (response.data?.id) {
+        return {
+          success: true,
+          platform: 'Facebook',
+          postId: response.data.id,
+          data: response.data,
+          message: 'Facebook image post published successfully!'
+        };
+      }
+    }
+    
+    // Handle multiple images (album)
+    else if (allImageFiles.length > 1 || imageUrls.length > 1) {
       const photoIds = [];
       
-      for (let i = 0; i < imageFiles.length; i++) {
+      // Upload image files
+      for (let i = 0; i < allImageFiles.length; i++) {
         try {
           const formData = new FormData();
-          formData.append('source', imageFiles[i].buffer, {
-            filename: imageFiles[i].originalname,
-            contentType: imageFiles[i].mimetype
+          formData.append('source', allImageFiles[i].buffer, {
+            filename: allImageFiles[i].originalname,
+            contentType: allImageFiles[i].mimetype
           });
           formData.append('published', 'false');
           formData.append('access_token', pageToken);
@@ -516,10 +674,11 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], ima
             photoIds.push(uploadResponse.data.id);
           }
         } catch (err) {
-          console.warn(`⚠️ Facebook file ${i + 1} upload failed:`, err.message);
+          console.warn(`⚠️ Facebook image file ${i + 1} upload failed:`, err.message);
         }
       }
 
+      // Upload image URLs
       for (let i = 0; i < imageUrls.length; i++) {
         try {
           const uploadResponse = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
@@ -532,7 +691,7 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], ima
             photoIds.push(uploadResponse.data.id);
           }
         } catch (err) {
-          console.warn(`⚠️ Facebook URL ${i + 1} upload failed:`, err.message);
+          console.warn(`⚠️ Facebook image URL ${i + 1} upload failed:`, err.message);
         }
       }
 
@@ -549,7 +708,7 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], ima
             platform: 'Facebook',
             postId: albumResponse.data.id,
             data: albumResponse.data,
-            message: `Facebook post with ${photoIds.length} images published successfully!`
+            message: `Facebook album with ${photoIds.length} images published successfully!`
           };
         }
       }
@@ -570,12 +729,12 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], ima
 }
 
 // --------------------
-// INSTAGRAM HELPERS - (unchanged)
+// INSTAGRAM HELPERS - Updated for video
 // --------------------
-async function postToInstagram({ content, pageAccessToken, instagramAccountId, imageUrls = [] }) {
+async function postToInstagram({ content, pageAccessToken, instagramAccountId, mediaUrls = [] }) {
   console.log('📷 Starting Instagram Graph API post:', {
     hasContent: !!content,
-    imageUrlCount: imageUrls.length,
+    mediaUrlCount: mediaUrls.length,
     hasPageToken: !!pageAccessToken,
     hasIgAccountId: !!instagramAccountId
   });
@@ -584,19 +743,21 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
     throw new Error('Instagram page access token and account ID are required');
   }
 
-  if (!content && imageUrls.length === 0) {
-    throw new Error('Content or images are required for Instagram posts');
+  if (!content && mediaUrls.length === 0) {
+    throw new Error('Content or media are required for Instagram posts');
   }
 
   try {
-    if (imageUrls.length === 0) {
-      throw new Error('Instagram requires at least one image. Text-only posts are not supported.');
+    if (mediaUrls.length === 0) {
+      throw new Error('Instagram requires at least one image or video. Text-only posts are not supported.');
     }
 
-    console.log(`🔍 Validating ${imageUrls.length} image URLs...`);
+    console.log(`🔍 Validating ${mediaUrls.length} media URLs...`);
     const validUrls = [];
+    const videoUrls = [];
+    const imageUrls = [];
     
-    for (const url of imageUrls) {
+    for (const url of mediaUrls) {
       try {
         const response = await axios.head(url, { 
           timeout: 15000,
@@ -607,9 +768,13 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
         
         const contentType = response.headers['content-type'];
         if (contentType && contentType.startsWith('image/')) {
-          validUrls.push(url);
+          imageUrls.push(url);
+          validUrls.push({ url, type: 'image' });
+        } else if (contentType && contentType.startsWith('video/')) {
+          videoUrls.push(url);
+          validUrls.push({ url, type: 'video' });
         } else {
-          console.warn(`⚠️ URL is not an image: ${url} (${contentType})`);
+          console.warn(`⚠️ URL is not valid media: ${url} (${contentType})`);
         }
         
       } catch (urlError) {
@@ -618,23 +783,63 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
     }
 
     if (validUrls.length === 0) {
-      throw new Error('No valid, accessible image URLs found. All images must be publicly accessible.');
+      throw new Error('No valid, accessible media URLs found. All media must be publicly accessible.');
     }
 
-    console.log(`📷 Using ${validUrls.length}/${imageUrls.length} validated URLs for Instagram post`);
+    console.log(`📷 Using ${validUrls.length}/${mediaUrls.length} validated URLs for Instagram post (${imageUrls.length} images, ${videoUrls.length} videos)`);
+
+    // Instagram supports either 1 video OR 1-10 images, but not mixed content
+    if (videoUrls.length > 0 && imageUrls.length > 0) {
+      throw new Error('Instagram does not support mixing images and videos in the same post. Please post them separately.');
+    }
+
+    if (videoUrls.length > 1) {
+      throw new Error('Instagram supports only 1 video per post.');
+    }
+
+    // Validate video requirements for Reels
+    if (videoUrls.length === 1) {
+      console.log('📷 Validating video requirements for Instagram Reels...');
+      // Instagram Reels requirements:
+      // - Aspect ratio: 9:16 (portrait)
+      // - Duration: 3-90 seconds
+      // - File size: Up to 4GB
+      // - Format: MP4
+      try {
+        const videoUrl = videoUrls[0];
+        const response = await axios.head(videoUrl, { 
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; InstagramBot/1.0)'
+          }
+        });
+        
+        const contentType = response.headers['content-type'];
+        if (!contentType || !contentType.startsWith('video/')) {
+          throw new Error('Invalid video format. Instagram Reels require MP4 video files.');
+        }
+        
+        console.log('✅ Video format validated for Instagram Reels');
+      } catch (validationError) {
+        console.warn('⚠️ Could not validate video format:', validationError.message);
+      }
+    }
 
     if (validUrls.length === 1) {
-      console.log('📷 Creating single image Instagram post...');
+      console.log(`📷 Creating single ${validUrls[0].type} Instagram post...`);
+      const mediaItem = validUrls[0];
+      
       const containerPayload = {
-        image_url: validUrls[0],
+        [mediaItem.type === 'video' ? 'video_url' : 'image_url']: mediaItem.url,
         caption: content || '',
+        media_type: mediaItem.type === 'video' ? 'REELS' : 'IMAGE',
         access_token: pageAccessToken
       };
-      
+
       const containerResponse = await axios.post(
         `https://graph.facebook.com/v18.0/${instagramAccountId}/media`,
         containerPayload,
-        { timeout: 30000 }
+        { timeout: 60000 }
       );
 
       if (!containerResponse.data?.id) {
@@ -644,18 +849,41 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
       const containerId = containerResponse.data.id;
       console.log('✅ Instagram media container created:', containerId);
 
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      try {
-        const statusResponse = await axios.get(
-          `https://graph.facebook.com/v18.0/${containerId}?fields=status_code,status&access_token=${pageAccessToken}`,
-          { timeout: 10000 }
-        );
-        if (statusResponse.data.status_code === 'ERROR') {
-          throw new Error(`Media processing failed: ${statusResponse.data.status || 'Unknown error'}`);
+      // Wait for media processing and check status
+      let isReady = false;
+      let attempts = 0;
+      const maxAttempts = 30; // 5 minutes total (30 * 10 seconds)
+      
+      while (!isReady && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds between checks
+        attempts++;
+        
+        try {
+          console.log(`📊 Checking media status (attempt ${attempts}/${maxAttempts})...`);
+          const statusResponse = await axios.get(
+            `https://graph.facebook.com/v18.0/${containerId}?fields=status_code,status&access_token=${pageAccessToken}`,
+            { timeout: 10000 }
+          );
+          
+          if (statusResponse.data.status_code === 'FINISHED') {
+            isReady = true;
+            console.log('✅ Media processing completed successfully');
+          } else if (statusResponse.data.status_code === 'ERROR') {
+            throw new Error(`Media processing failed: ${statusResponse.data.status || 'Unknown error'}`);
+          } else {
+            console.log(`⏳ Media still processing: ${statusResponse.data.status_code} - ${statusResponse.data.status || 'Processing...'}`);
+          }
+        } catch (statusError) {
+          console.warn(`⚠️ Could not check media status (attempt ${attempts}):`, statusError.message);
+          if (attempts === maxAttempts) {
+            console.warn('⚠️ Proceeding with publish attempt despite status check failure');
+            isReady = true; // Try to publish anyway
+          }
         }
-      } catch (statusError) {
-        console.warn('⚠️ Could not check media status:', statusError.message);
+      }
+      
+      if (!isReady) {
+        throw new Error('Media processing timed out. Please try again with a smaller video file.');
       }
 
       const publishPayload = {
@@ -666,7 +894,7 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
       const publishResponse = await axios.post(
         `https://graph.facebook.com/v18.0/${instagramAccountId}/media_publish`,
         publishPayload,
-        { timeout: 30000 }
+        { timeout: 60000 }
       );
 
       if (publishResponse.data?.id) {
@@ -675,13 +903,14 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
           platform: 'Instagram',
           postId: publishResponse.data.id,
           data: publishResponse.data,
-          message: 'Instagram post published successfully!'
+          message: `Instagram ${mediaItem.type} post published successfully!`
         };
       } else {
         throw new Error(`Failed to publish Instagram post: ${publishResponse.data?.error?.message || 'Unknown error'}`);
       }
 
-    } else if (validUrls.length <= 10) {
+    } else if (validUrls.length <= 10 && videoUrls.length === 0) {
+      // Multiple images (carousel)
       console.log(`📷 Creating Instagram carousel post with ${validUrls.length} images...`);
       const containerIds = [];
       
@@ -692,11 +921,11 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
           const containerResponse = await axios.post(
             `https://graph.facebook.com/v18.0/${instagramAccountId}/media`,
             {
-              image_url: validUrls[i],
+              image_url: validUrls[i].url,
               is_carousel_item: true,
               access_token: pageAccessToken
             },
-            { timeout: 30000 }
+            { timeout: 60000 }
           );
 
           if (containerResponse.data?.id) {
@@ -727,7 +956,7 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
           caption: content || '',
           access_token: pageAccessToken
         },
-        { timeout: 30000 }
+        { timeout: 60000 }
       );
 
       if (!carouselResponse.data?.id) {
@@ -745,7 +974,7 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
           creation_id: carouselId,
           access_token: pageAccessToken
         },
-        { timeout: 30000 }
+        { timeout: 60000 }
       );
 
       if (publishResponse.data?.id) {
@@ -760,7 +989,7 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
         throw new Error(`Failed to publish Instagram carousel: ${publishResponse.data?.error?.message || 'Unknown error'}`);
       }
     } else {
-      throw new Error('Instagram supports maximum 10 images in a carousel');
+      throw new Error('Instagram supports maximum 10 images in a carousel, or 1 video per post');
     }
 
   } catch (postError) {
@@ -777,7 +1006,7 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
     } else if (postError.response?.data?.error?.error_user_msg) {
       errorMessage = postError.response.data.error.error_user_msg;
     } else if (postError.response?.status === 400) {
-      errorMessage = 'Bad request. Check that images are valid and accessible, and Instagram account is properly connected.';
+      errorMessage = 'Bad request. Check that media files are valid and accessible, and Instagram account is properly connected.';
     } else if (postError.response?.status === 403) {
       errorMessage = 'Permission denied. Ensure Instagram account has posting permissions and is a Business/Creator account.';
     } else if (postError.response?.status === 429) {
@@ -795,59 +1024,66 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, i
 // ROUTES
 // --------------------
 
+// Updated multer to handle both images and videos
+const uploadFields = upload.fields([
+  { name: 'images', maxCount: 10 },
+  { name: 'videos', maxCount: 5 }
+]);
+
 // ✅ Updated Instagram route using Cloudinary
-router.post('/instagram', upload.array('images', 10), async (req, res) => {
+router.post('/instagram', uploadFields, async (req, res) => {
   try {
     console.log('📥 Instagram posting route hit:', {
       hasContent: !!req.body.content,
       hasPageToken: !!req.body.pageAccessToken,
       hasIgAccountId: !!req.body.instagramAccountId,
-      hasImageUrls: !!req.body.imageUrls,
-      fileCount: req.files?.length || 0
+      hasMediaUrls: !!req.body.mediaUrls,
+      imageFileCount: req.files?.images?.length || 0,
+      videoFileCount: req.files?.videos?.length || 0
     });
 
-    let allImageUrls = [];
+    let allMediaUrls = [];
     
     // Upload files to Cloudinary
-    if (req.files && req.files.length > 0) {
+    if ((req.files?.images?.length > 0) || (req.files?.videos?.length > 0)) {
       console.log('☁️ Processing files through Cloudinary for Instagram...');
-      const cloudinaryUrls = await convertFilesToCloudinaryUrls(req.files);
-      allImageUrls.push(...cloudinaryUrls);
+      const cloudinaryUrls = await convertFilesToCloudinaryUrls(req.files?.images || [], req.files?.videos || []);
+      allMediaUrls.push(...cloudinaryUrls.map(item => item.url));
       console.log(`✅ ${cloudinaryUrls.length} files uploaded to Cloudinary`);
     }
     
     // Add provided URLs
-    if (req.body.imageUrls) {
-      const providedUrls = req.body.imageUrls.split(',')
+    if (req.body.mediaUrls) {
+      const providedUrls = req.body.mediaUrls.split(',')
         .map(url => url.trim())
         .filter(url => url);
-      allImageUrls.push(...providedUrls);
+      allMediaUrls.push(...providedUrls);
       console.log(`📎 Added ${providedUrls.length} provided URLs`);
     }
 
-    if (allImageUrls.length === 0) {
+    if (allMediaUrls.length === 0) {
       return res.status(400).json({
         success: false,
         platform: 'Instagram',
-        error: 'At least one image is required for Instagram posts'
+        error: 'At least one image or video is required for Instagram posts'
       });
     }
 
-    if (allImageUrls.length > 10) {
+    if (allMediaUrls.length > 10) {
       return res.status(400).json({
         success: false,
         platform: 'Instagram',
-        error: 'Instagram supports maximum 10 images in a carousel'
+        error: 'Instagram supports maximum 10 images in a carousel or 1 video per post'
       });
     }
 
-    console.log(`📷 Posting to Instagram with ${allImageUrls.length} images`);
+    console.log(`📷 Posting to Instagram with ${allMediaUrls.length} media files`);
 
     const result = await postToInstagram({
       content: req.body.content,
       pageAccessToken: req.body.pageAccessToken,
       instagramAccountId: req.body.instagramAccountId,
-      imageUrls: allImageUrls
+      mediaUrls: allMediaUrls
     });
 
     res.json(result);
@@ -863,48 +1099,71 @@ router.post('/instagram', upload.array('images', 10), async (req, res) => {
   }
 });
 
-// ✅ New: Test Cloudinary connection
-router.get('/test-cloudinary', async (req, res) => {
+// Other platform routes (updated with video support)
+router.post('/twitter', uploadFields, async (req, res) => {
   try {
-    const result = await cloudinary.api.ping();
-    res.json({
-      success: true,
-      message: 'Cloudinary connection successful',
-      status: result.status,
-      timestamp: new Date().toISOString()
+    const mediaUrls = req.body.mediaUrls ? req.body.mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+    const result = await postToTwitter({ 
+      content: req.body.content, 
+      accessToken: req.body.accessToken, 
+      imageFiles: req.files?.images || [], 
+      videoFiles: req.files?.videos || [],
+      mediaUrls 
     });
+    res.json(result);
   } catch (error) {
-    console.error('❌ Cloudinary test failed:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Cloudinary connection failed',
-      details: error.message
-    });
+    console.error('❌ Twitter route error:', error.message);
+    const status = error.status || error.response?.status || 500;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+    res.status(status).json({ success: false, platform: 'Twitter', error: error.message });
   }
 });
 
-// Other routes (unchanged)
-router.post('/twitter', upload.array('images', 4), async (req, res) => {
-  const imageUrls = req.body.imageUrls ? req.body.imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
-  const result = await postToTwitter({ content: req.body.content, accessToken: req.body.accessToken, imageFiles: req.files || [], imageUrls });
-  res.json(result);
+router.post('/facebook', uploadFields, async (req, res) => {
+  try {
+    const mediaUrls = req.body.mediaUrls ? req.body.mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+    const result = await postToFacebook({ 
+      content: req.body.content, 
+      pageId: req.body.pageId, 
+      pageToken: req.body.pageToken, 
+      imageFiles: req.files?.images || [], 
+      videoFiles: req.files?.videos || [],
+      mediaUrls 
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('❌ Facebook route error:', error.message);
+    const status = error.status || error.response?.status || 500;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+    res.status(status).json({ success: false, platform: 'Facebook', error: error.message });
+  }
 });
 
-router.post('/facebook', upload.array('images', 10), async (req, res) => {
-  const imageUrls = req.body.imageUrls ? req.body.imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
-  const result = await postToFacebook({ content: req.body.content, pageId: req.body.pageId, pageToken: req.body.pageToken, imageFiles: req.files || [], imageUrls });
-  res.json(result);
+router.post('/linkedin', uploadFields, async (req, res) => {
+  try {
+    const mediaUrls = req.body.mediaUrls ? req.body.mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+    const result = await postToLinkedIn({ 
+      content: req.body.content, 
+      accessToken: req.body.accessToken, 
+      userId: req.body.userId, 
+      imageFiles: req.files?.images || [], 
+      videoFiles: req.files?.videos || [],
+      mediaUrls 
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('❌ LinkedIn route error:', error.message);
+    const status = error.status || error.response?.status || 500;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
+    res.status(status).json({ success: false, platform: 'LinkedIn', error: error.message });
+  }
 });
 
-router.post('/linkedin', upload.array('images', 9), async (req, res) => {
-  const imageUrls = req.body.imageUrls ? req.body.imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
-  const result = await postToLinkedIn({ content: req.body.content, accessToken: req.body.accessToken, userId: req.body.userId, imageFiles: req.files || [], imageUrls });
-  res.json(result);
-});
-
-router.post('/multi', upload.array('images', 10), async (req, res) => {
-  const { content, platforms, credentials, imageUrls } = req.body;
-  const imageFiles = req.files || [];
+// Updated multi-platform route
+router.post('/multi', uploadFields, async (req, res) => {
+  const { content, platforms, credentials, mediaUrls } = req.body;
+  const imageFiles = req.files?.images || [];
+  const videoFiles = req.files?.videos || [];
 
   let parsedPlatforms, parsedCredentials;
   try {
@@ -918,7 +1177,7 @@ router.post('/multi', upload.array('images', 10), async (req, res) => {
     return res.status(400).json({ success: false, error: 'Platforms array required' });
   }
 
-  const parsedImageUrls = imageUrls ? imageUrls.split(',').map(url => url.trim()).filter(url => url) : [];
+  const parsedMediaUrls = mediaUrls ? mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
 
   const postPromises = parsedPlatforms.map(async (platform) => {
     try {
@@ -930,7 +1189,8 @@ router.post('/multi', upload.array('images', 10), async (req, res) => {
             content,
             accessToken: parsedCredentials.twitter.accessToken,
             imageFiles: imageFiles.slice(0, 4),
-            imageUrls: parsedImageUrls.slice(0, 4 - imageFiles.length)
+            videoFiles: videoFiles.slice(0, 1), // Twitter: max 1 video
+            mediaUrls: parsedMediaUrls.slice(0, 4 - imageFiles.length - videoFiles.length)
           });
           break;
           
@@ -941,25 +1201,26 @@ router.post('/multi', upload.array('images', 10), async (req, res) => {
             pageId: parsedCredentials.facebook.pageId,
             pageToken: parsedCredentials.facebook.pageToken,
             imageFiles,
-            imageUrls: parsedImageUrls
+            videoFiles,
+            mediaUrls: parsedMediaUrls
           });
           break;
           
         case 'instagram':
           if (!parsedCredentials.instagram?.pageAccessToken || !parsedCredentials.instagram?.instagramAccountId) throw new Error('Instagram credentials not found');
           
-          let allImageUrls = [];
-          if (imageFiles.length > 0) {
-            const cloudinaryUrls = await convertFilesToCloudinaryUrls(imageFiles);
-            allImageUrls.push(...cloudinaryUrls);
+          let allMediaUrls = [];
+          if (imageFiles.length > 0 || videoFiles.length > 0) {
+            const cloudinaryUrls = await convertFilesToCloudinaryUrls(imageFiles, videoFiles);
+            allMediaUrls.push(...cloudinaryUrls.map(item => item.url));
           }
-          allImageUrls.push(...parsedImageUrls.slice(0, 10 - allImageUrls.length));
+          allMediaUrls.push(...parsedMediaUrls.slice(0, 10 - allMediaUrls.length));
           
           result = await postToInstagram({
             content,
             pageAccessToken: parsedCredentials.instagram.pageAccessToken,
             instagramAccountId: parsedCredentials.instagram.instagramAccountId,
-            imageUrls: allImageUrls.slice(0, 10)
+            mediaUrls: allMediaUrls.slice(0, 10)
           });
           break;
           
@@ -970,7 +1231,8 @@ router.post('/multi', upload.array('images', 10), async (req, res) => {
             accessToken: parsedCredentials.linkedin.accessToken,
             userId: parsedCredentials.linkedin.userId,
             imageFiles: imageFiles.slice(0, 9),
-            imageUrls: parsedImageUrls.slice(0, 9 - imageFiles.length)
+            videoFiles: videoFiles.slice(0, 5),
+            mediaUrls: parsedMediaUrls.slice(0, 9 - imageFiles.length - videoFiles.length)
           });
           break;
           
@@ -983,19 +1245,90 @@ router.post('/multi', upload.array('images', 10), async (req, res) => {
     }
   });
 
-  const results = await Promise.all(postPromises);
-  const successful = results.filter(r => r.success);
-  const failed = results.filter(r => !r.success);
+  try {
+    const results = await Promise.all(postPromises);
+    const successful = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
 
+    const totalMediaCount = imageFiles.length + videoFiles.length + parsedMediaUrls.length;
+
+    res.json({
+      success: successful.length > 0,
+      totalPlatforms: parsedPlatforms.length,
+      successful: successful.length,
+      failed: failed.length,
+      results,
+      message: successful.length === parsedPlatforms.length
+        ? `Successfully posted to all ${parsedPlatforms.length} platforms with ${totalMediaCount} media files!`
+        : `Posted to ${successful.length} out of ${parsedPlatforms.length} platforms`
+    });
+  } catch (error) {
+    console.error('❌ Multi-platform posting error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process multi-platform posting',
+      details: error.message
+    });
+  }
+});
+
+// ✅ Test Cloudinary connection
+router.get('/test-cloudinary', async (req, res) => {
+  try {
+    const result = await cloudinary.api.ping();
+    res.json({
+      success: true,
+      message: 'Cloudinary connection successful',
+      status: result.status,
+      timestamp: new Date().toISOString(),
+      supportedFormats: {
+        images: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'],
+        videos: ['mp4', 'mov', 'avi', 'wmv', 'flv', 'webm', 'm4v']
+      }
+    });
+  } catch (error) {
+    console.error('❌ Cloudinary test failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Cloudinary connection failed',
+      details: error.message
+    });
+  }
+});
+
+// ✅ Get platform capabilities
+router.get('/capabilities', (req, res) => {
   res.json({
-    success: successful.length > 0,
-    totalPlatforms: parsedPlatforms.length,
-    successful: successful.length,
-    failed: failed.length,
-    results,
-    message: successful.length === parsedPlatforms.length
-      ? `Successfully posted to all ${parsedPlatforms.length} platforms with ${imageFiles.length + parsedImageUrls.length} images!`
-      : `Posted to ${successful.length} out of ${parsedPlatforms.length} platforms`
+    platforms: {
+      twitter: {
+        maxMedia: 4,
+        supportsVideo: true,
+        videoFormats: ['mp4', 'mov'],
+        maxVideoSize: '512MB',
+        notes: 'Max 1 video OR up to 4 images per tweet'
+      },
+      facebook: {
+        maxMedia: 10,
+        supportsVideo: true,
+        videoFormats: ['mp4', 'mov', 'avi'],
+        maxVideoSize: '4GB',
+        notes: 'Supports single video or multiple images'
+      },
+      instagram: {
+        maxMedia: 10,
+        supportsVideo: true,
+        videoFormats: ['mp4', 'mov'],
+        maxVideoSize: '100MB',
+        notes: 'Max 1 video OR up to 10 images per post (no mixing)'
+      },
+      linkedin: {
+        maxMedia: 9,
+        supportsVideo: true,
+        videoFormats: ['mp4', 'mov', 'wmv', 'flv', 'avi'],
+        maxVideoSize: '5GB',
+        notes: 'Supports both images and videos'
+      }
+    }
   });
 });
 
