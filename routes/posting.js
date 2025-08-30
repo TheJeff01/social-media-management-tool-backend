@@ -212,7 +212,7 @@ async function uploadLinkedInMedia(mediaFile, mediaUrl, accessToken, userId, isV
     const asset = initResponse.data.value.asset;
 
     console.log(`✅ LinkedIn ${isVideo ? 'video' : 'image'} upload initialized:`, { asset, uploadUrl: uploadUrl.substring(0, 50) + '...' });
-
+    
     const uploadResponse = await axios.put(
       uploadUrl,
       mediaBuffer,
@@ -447,7 +447,7 @@ async function postToTwitter({ content, accessToken, imageFiles = [], videoFiles
   }
 
   try {
-    let mediaIds = [];
+  let mediaIds = [];
     const maxMedia = 4; // Twitter limit
     let processedCount = 0;
 
@@ -467,10 +467,10 @@ async function postToTwitter({ content, accessToken, imageFiles = [], videoFiles
       if (processedCount === 0) { // Only add video if no images were added
         try {
           const mediaId = await uploadTwitterMedia(videoFiles[i], null, accessToken, true);
-          mediaIds.push(mediaId);
+      mediaIds.push(mediaId);
           processedCount++;
           break; // Twitter only supports 1 video per tweet
-        } catch (err) {
+    } catch (err) {
           console.warn(`⚠️ Twitter video file ${i + 1} upload failed:`, err.message);
         }
       }
@@ -484,31 +484,31 @@ async function postToTwitter({ content, accessToken, imageFiles = [], videoFiles
         if (isVideoUrl && mediaIds.length > 0) continue; // Skip if already have media (Twitter: 1 video OR multiple images)
         
         const mediaId = await uploadTwitterMedia(null, mediaUrls[i], accessToken, isVideoUrl);
-        mediaIds.push(mediaId);
+      mediaIds.push(mediaId);
         if (isVideoUrl) break; // Only one video allowed
-      } catch (err) {
-        console.warn(`⚠️ Twitter URL ${i + 1} upload failed:`, err.message);
-      }
+    } catch (err) {
+      console.warn(`⚠️ Twitter URL ${i + 1} upload failed:`, err.message);
     }
+  }
 
-    const tweetPayload = { text: content || ' ' };
-    if (mediaIds.length > 0) {
-      tweetPayload.media = { media_ids: mediaIds };
+  const tweetPayload = { text: content || ' ' };
+  if (mediaIds.length > 0) {
+    tweetPayload.media = { media_ids: mediaIds };
+  }
+
+  const response = await axios.post('https://api.twitter.com/2/tweets', tweetPayload, {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
     }
+  });
 
-    const response = await axios.post('https://api.twitter.com/2/tweets', tweetPayload, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (response.data?.data) {
-      return {
-        success: true,
-        platform: 'Twitter',
-        postId: response.data.data.id,
-        data: response.data.data,
+  if (response.data?.data) {
+    return {
+      success: true,
+      platform: 'Twitter',
+      postId: response.data.data.id,
+      data: response.data.data,
         message: `Tweet with ${mediaIds.length} media file${mediaIds.length !== 1 ? 's' : ''} posted successfully!`
       };
     }
@@ -589,20 +589,20 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], vid
 
     // Handle text-only post
     if (allImageFiles.length === 0 && allVideoFiles.length === 0 && imageUrls.length === 0 && videoUrls.length === 0) {
-      const response = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
-        message: content,
-        access_token: pageToken
-      });
+    const response = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
+      message: content,
+      access_token: pageToken
+    });
 
-      if (response.data?.id) {
-        return {
-          success: true,
-          platform: 'Facebook',
-          postId: response.data.id,
-          data: response.data,
-          message: 'Facebook post published successfully!'
-        };
-      }
+    if (response.data?.id) {
+      return {
+        success: true,
+        platform: 'Facebook',
+        postId: response.data.id,
+        data: response.data,
+        message: 'Facebook post published successfully!'
+      };
+    }
     }
     
     // Handle single image post
@@ -638,12 +638,12 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], vid
         access_token: pageToken
       });
 
-      if (response.data?.id) {
-        return {
-          success: true,
-          platform: 'Facebook',
-          postId: response.data.id,
-          data: response.data,
+    if (response.data?.id) {
+      return {
+        success: true,
+        platform: 'Facebook',
+        postId: response.data.id,
+        data: response.data,
           message: 'Facebook image post published successfully!'
         };
       }
@@ -651,68 +651,68 @@ async function postToFacebook({ content, pageId, pageToken, imageFiles = [], vid
     
     // Handle multiple images (album)
     else if (allImageFiles.length > 1 || imageUrls.length > 1) {
-      const photoIds = [];
-      
+    const photoIds = [];
+    
       // Upload image files
       for (let i = 0; i < allImageFiles.length; i++) {
-        try {
-          const formData = new FormData();
+      try {
+        const formData = new FormData();
           formData.append('source', allImageFiles[i].buffer, {
             filename: allImageFiles[i].originalname,
             contentType: allImageFiles[i].mimetype
           });
           formData.append('published', 'false');
-          formData.append('access_token', pageToken);
+        formData.append('access_token', pageToken);
 
-          const uploadResponse = await axios.post(
-            `https://graph.facebook.com/${pageId}/photos`,
-            formData,
-            { headers: formData.getHeaders() }
-          );
+        const uploadResponse = await axios.post(
+          `https://graph.facebook.com/${pageId}/photos`,
+          formData,
+          { headers: formData.getHeaders() }
+        );
 
-          if (uploadResponse.data?.id) {
-            photoIds.push(uploadResponse.data.id);
-          }
-        } catch (err) {
-          console.warn(`⚠️ Facebook image file ${i + 1} upload failed:`, err.message);
+        if (uploadResponse.data?.id) {
+          photoIds.push(uploadResponse.data.id);
         }
+      } catch (err) {
+          console.warn(`⚠️ Facebook image file ${i + 1} upload failed:`, err.message);
       }
+    }
 
       // Upload image URLs
-      for (let i = 0; i < imageUrls.length; i++) {
-        try {
-          const uploadResponse = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
-            url: imageUrls[i],
-            published: false,
-            access_token: pageToken
-          });
-
-          if (uploadResponse.data?.id) {
-            photoIds.push(uploadResponse.data.id);
-          }
-        } catch (err) {
-          console.warn(`⚠️ Facebook image URL ${i + 1} upload failed:`, err.message);
-        }
-      }
-
-      if (photoIds.length > 0) {
-        const albumResponse = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
-          message: content || '',
-          attached_media: photoIds.map(id => ({ media_fbid: id })),
+    for (let i = 0; i < imageUrls.length; i++) {
+      try {
+        const uploadResponse = await axios.post(`https://graph.facebook.com/${pageId}/photos`, {
+          url: imageUrls[i],
+          published: false,
           access_token: pageToken
         });
 
-        if (albumResponse.data?.id) {
-          return {
-            success: true,
-            platform: 'Facebook',
-            postId: albumResponse.data.id,
-            data: albumResponse.data,
-            message: `Facebook album with ${photoIds.length} images published successfully!`
-          };
+        if (uploadResponse.data?.id) {
+          photoIds.push(uploadResponse.data.id);
         }
+      } catch (err) {
+          console.warn(`⚠️ Facebook image URL ${i + 1} upload failed:`, err.message);
       }
     }
+
+    if (photoIds.length > 0) {
+      const albumResponse = await axios.post(`https://graph.facebook.com/${pageId}/feed`, {
+        message: content || '',
+        attached_media: photoIds.map(id => ({ media_fbid: id })),
+        access_token: pageToken
+      });
+
+      if (albumResponse.data?.id) {
+        return {
+          success: true,
+          platform: 'Facebook',
+          postId: albumResponse.data.id,
+          data: albumResponse.data,
+            message: `Facebook album with ${photoIds.length} images published successfully!`
+        };
+      }
+    }
+  }
 
     throw httpError('Invalid response from Facebook API', 502);
   } catch (e) {
@@ -831,9 +831,9 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, m
       
       const containerPayload = {
         [mediaItem.type === 'video' ? 'video_url' : 'image_url']: mediaItem.url,
-        caption: content || '',
+          caption: content || '',
         media_type: mediaItem.type === 'video' ? 'REELS' : 'IMAGE',
-        access_token: pageAccessToken
+          access_token: pageAccessToken
       };
 
       const containerResponse = await axios.post(
@@ -887,8 +887,8 @@ async function postToInstagram({ content, pageAccessToken, instagramAccountId, m
       }
 
       const publishPayload = {
-        creation_id: containerId,
-        access_token: pageAccessToken
+          creation_id: containerId,
+          access_token: pageAccessToken
       };
       
       const publishResponse = await axios.post(
@@ -1103,9 +1103,9 @@ router.post('/instagram', uploadFields, async (req, res) => {
 router.post('/twitter', uploadFields, async (req, res) => {
   try {
     const mediaUrls = req.body.mediaUrls ? req.body.mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
-    const result = await postToTwitter({ 
-      content: req.body.content, 
-      accessToken: req.body.accessToken, 
+    const result = await postToTwitter({
+      content: req.body.content,
+      accessToken: req.body.accessToken,
       imageFiles: req.files?.images || [], 
       videoFiles: req.files?.videos || [],
       mediaUrls 
@@ -1122,10 +1122,10 @@ router.post('/twitter', uploadFields, async (req, res) => {
 router.post('/facebook', uploadFields, async (req, res) => {
   try {
     const mediaUrls = req.body.mediaUrls ? req.body.mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
-    const result = await postToFacebook({ 
-      content: req.body.content, 
-      pageId: req.body.pageId, 
-      pageToken: req.body.pageToken, 
+    const result = await postToFacebook({
+      content: req.body.content,
+      pageId: req.body.pageId,
+      pageToken: req.body.pageToken,
       imageFiles: req.files?.images || [], 
       videoFiles: req.files?.videos || [],
       mediaUrls 
@@ -1142,10 +1142,10 @@ router.post('/facebook', uploadFields, async (req, res) => {
 router.post('/linkedin', uploadFields, async (req, res) => {
   try {
     const mediaUrls = req.body.mediaUrls ? req.body.mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
-    const result = await postToLinkedIn({ 
-      content: req.body.content, 
-      accessToken: req.body.accessToken, 
-      userId: req.body.userId, 
+    const result = await postToLinkedIn({
+      content: req.body.content,
+      accessToken: req.body.accessToken,
+      userId: req.body.userId,
       imageFiles: req.files?.images || [], 
       videoFiles: req.files?.videos || [],
       mediaUrls 
@@ -1166,47 +1166,47 @@ router.post('/multi', uploadFields, async (req, res) => {
   const videoFiles = req.files?.videos || [];
 
   let parsedPlatforms, parsedCredentials;
-  try {
-    parsedPlatforms = typeof platforms === 'string' ? JSON.parse(platforms) : platforms;
-    parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
-  } catch (parseError) {
+    try {
+      parsedPlatforms = typeof platforms === 'string' ? JSON.parse(platforms) : platforms;
+      parsedCredentials = typeof credentials === 'string' ? JSON.parse(credentials) : credentials;
+    } catch (parseError) {
     return res.status(400).json({ success: false, error: 'Invalid JSON data in request', details: parseError.message });
-  }
+    }
 
-  if (!Array.isArray(parsedPlatforms) || parsedPlatforms.length === 0) {
+    if (!Array.isArray(parsedPlatforms) || parsedPlatforms.length === 0) {
     return res.status(400).json({ success: false, error: 'Platforms array required' });
-  }
+    }
 
   const parsedMediaUrls = mediaUrls ? mediaUrls.split(',').map(url => url.trim()).filter(url => url) : [];
 
-  const postPromises = parsedPlatforms.map(async (platform) => {
-    try {
-      let result;
-      switch (platform.toLowerCase()) {
-        case 'twitter':
+    const postPromises = parsedPlatforms.map(async (platform) => {
+      try {
+        let result;
+        switch (platform.toLowerCase()) {
+          case 'twitter':
           if (!parsedCredentials.twitter?.accessToken) throw new Error('Twitter credentials not found');
-          result = await postToTwitter({
-            content,
-            accessToken: parsedCredentials.twitter.accessToken,
+            result = await postToTwitter({
+              content,
+              accessToken: parsedCredentials.twitter.accessToken,
             imageFiles: imageFiles.slice(0, 4),
             videoFiles: videoFiles.slice(0, 1), // Twitter: max 1 video
             mediaUrls: parsedMediaUrls.slice(0, 4 - imageFiles.length - videoFiles.length)
-          });
-          break;
-          
-        case 'facebook':
+            });
+            break;
+            
+          case 'facebook':
           if (!parsedCredentials.facebook?.pageId || !parsedCredentials.facebook?.pageToken) throw new Error('Facebook credentials not found');
-          result = await postToFacebook({
-            content,
-            pageId: parsedCredentials.facebook.pageId,
-            pageToken: parsedCredentials.facebook.pageToken,
-            imageFiles,
+            result = await postToFacebook({
+              content,
+              pageId: parsedCredentials.facebook.pageId,
+              pageToken: parsedCredentials.facebook.pageToken,
+              imageFiles,
             videoFiles,
             mediaUrls: parsedMediaUrls
-          });
-          break;
-          
-        case 'instagram':
+            });
+            break;
+            
+          case 'instagram':
           if (!parsedCredentials.instagram?.pageAccessToken || !parsedCredentials.instagram?.instagramAccountId) throw new Error('Instagram credentials not found');
           
           let allMediaUrls = [];
@@ -1216,34 +1216,34 @@ router.post('/multi', uploadFields, async (req, res) => {
           }
           allMediaUrls.push(...parsedMediaUrls.slice(0, 10 - allMediaUrls.length));
           
-          result = await postToInstagram({
-            content,
-            pageAccessToken: parsedCredentials.instagram.pageAccessToken,
-            instagramAccountId: parsedCredentials.instagram.instagramAccountId,
+            result = await postToInstagram({
+              content,
+              pageAccessToken: parsedCredentials.instagram.pageAccessToken,
+              instagramAccountId: parsedCredentials.instagram.instagramAccountId,
             mediaUrls: allMediaUrls.slice(0, 10)
-          });
-          break;
-          
-        case 'linkedin':
+            });
+            break;
+            
+          case 'linkedin':
           if (!parsedCredentials.linkedin?.accessToken || !parsedCredentials.linkedin?.userId) throw new Error('LinkedIn credentials not found');
-          result = await postToLinkedIn({
-            content,
-            accessToken: parsedCredentials.linkedin.accessToken,
-            userId: parsedCredentials.linkedin.userId,
+            result = await postToLinkedIn({
+              content,
+              accessToken: parsedCredentials.linkedin.accessToken,
+              userId: parsedCredentials.linkedin.userId,
             imageFiles: imageFiles.slice(0, 9),
             videoFiles: videoFiles.slice(0, 5),
             mediaUrls: parsedMediaUrls.slice(0, 9 - imageFiles.length - videoFiles.length)
-          });
-          break;
-          
-        default:
-          throw new Error(`${platform} posting not implemented yet`);
+            });
+            break;
+            
+          default:
+            throw new Error(`${platform} posting not implemented yet`);
+        }
+        return { platform, success: true, result };
+      } catch (err) {
+        return { platform, success: false, error: err.message };
       }
-      return { platform, success: true, result };
-    } catch (err) {
-      return { platform, success: false, error: err.message };
-    }
-  });
+    });
 
   try {
     const results = await Promise.all(postPromises);
@@ -1288,8 +1288,8 @@ router.get('/test-cloudinary', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Cloudinary test failed:', error);
-    res.status(500).json({
-      success: false,
+    res.status(500).json({ 
+      success: false, 
       error: 'Cloudinary connection failed',
       details: error.message
     });

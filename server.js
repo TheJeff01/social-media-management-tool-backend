@@ -4,8 +4,14 @@ const path = require('path');
 const axios = require('axios');
 require('dotenv').config();
 
+// Import database connection
+const connectDB = require('./config/database');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Connect to MongoDB
+connectDB();
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -50,10 +56,39 @@ app.get('/', (req, res) => {
   });
 });
 
-
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
+  
+  // Handle MongoDB errors
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({ 
+      error: 'Validation Error',
+      message: Object.values(err.errors).map(e => e.message).join(', ')
+    });
+  }
+  
+  if (err.code === 11000) {
+    return res.status(400).json({ 
+      error: 'Duplicate Error',
+      message: 'This record already exists'
+    });
+  }
+  
+  if (err.name === 'JsonWebTokenError') {
+    return res.status(401).json({ 
+      error: 'Invalid Token',
+      message: 'Invalid or expired token'
+    });
+  }
+  
+  if (err.name === 'TokenExpiredError') {
+    return res.status(401).json({ 
+      error: 'Token Expired',
+      message: 'Token has expired'
+    });
+  }
+  
   res.status(500).json({ 
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
