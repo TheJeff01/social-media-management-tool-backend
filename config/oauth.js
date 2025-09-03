@@ -23,11 +23,11 @@ module.exports = {
   facebook: {
     clientId: process.env.FACEBOOK_APP_ID,
     clientSecret: process.env.FACEBOOK_APP_SECRET,
+    authUrl: "https://www.facebook.com/v18.0/dialog/oauth",
+    tokenUrl: "https://graph.facebook.com/v18.0/oauth/access_token",
     redirectUri: process.env.FACEBOOK_REDIRECT_URI,
-    authUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
-    tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
-    userUrl: 'https://graph.facebook.com/v18.0/me',
-    scope: 'pages_manage_posts,pages_show_list,pages_read_engagement,public_profile'
+    scope: "email public_profile pages_show_list pages_read_engagement",
+    userUrl: "https://graph.facebook.com/v18.0/me"
   },
   // Instagram uses Facebook's Graph API for business accounts
   instagram: {

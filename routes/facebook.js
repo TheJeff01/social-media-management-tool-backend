@@ -118,8 +118,28 @@ router.get("/callback", async (req, res) => {
   }
 });
 
-// Step 3: Get Facebook user data and save to database
-router.get("/user/:sessionId", authenticateUser, async (req, res) => {
+// Get available pages from session
+router.get("/pages/:sessionId", authenticateUser, async (req, res) => {
+  const { sessionId } = req.params;
+  const tokens = tokenUtils.getTokens(sessionId);
+
+  if (!tokens || tokens.platform !== "facebook") {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  try {
+    res.json({
+      pages: tokens.pages,
+      user: tokens.user
+    });
+  } catch (error) {
+    console.error('Error fetching pages:', error);
+    res.status(500).json({ error: 'Failed to fetch pages' });
+  }
+});
+
+// Fixed Facebook backend route - Step 3: Save selected Facebook page to database
+router.post("/user/:sessionId", authenticateUser, async (req, res) => {
   const { sessionId } = req.params;
   const tokens = tokenUtils.getTokens(sessionId);
 
@@ -130,42 +150,52 @@ router.get("/user/:sessionId", authenticateUser, async (req, res) => {
   try {
     const { userId } = req;
     const { accessToken, user, pages } = tokens;
+    const { pageId } = req.body;
 
-    // Save or update Facebook account in database
-    if (pages.length > 0) {
-      // Use the first page for posting
-      const page = pages[0];
+    let savedAccount;
+    let selectedAccessToken = accessToken;
+    let selectedPageData = null;
+
+    if (pages && pages.length > 0 && pageId) {
+      // User selected a specific page
+      const selectedPage = pages.find(p => p.id === pageId);
+      if (!selectedPage) {
+        return res.status(400).json({ error: "Invalid page selection" });
+      }
+      
+      selectedPageData = selectedPage;
+      selectedAccessToken = selectedPage.access_token; // Use page access token
       
       const existingAccount = await SocialMediaAccount.findOne({
         userId: userId,
         platform: 'facebook',
-        accountId: page.id
+        accountId: selectedPage.id
       });
 
       if (existingAccount) {
         // Update existing account
-        existingAccount.accountName = page.name;
-        existingAccount.accessToken = page.access_token; // Use page access token
-        existingAccount.pageId = page.id;
-        existingAccount.pageName = page.name;
+        existingAccount.accountName = selectedPage.name;
+        existingAccount.accessToken = selectedPage.access_token;
+        existingAccount.pageId = selectedPage.id;
+        existingAccount.pageName = selectedPage.name;
         existingAccount.lastUsed = new Date();
-        await existingAccount.save();
+        savedAccount = await existingAccount.save();
       } else {
         // Create new account
         const socialAccount = new SocialMediaAccount({
           userId: userId,
           platform: 'facebook',
-          accountName: page.name,
-          accountId: page.id,
-          accessToken: page.access_token, // Use page access token
-          pageId: page.id,
-          pageName: page.name,
+          accountName: selectedPage.name,
+          accountId: selectedPage.id,
+          accessToken: selectedPage.access_token,
+          pageId: selectedPage.id,
+          pageName: selectedPage.name,
           isActive: true
         });
-        await socialAccount.save();
+        savedAccount = await socialAccount.save();
       }
     } else {
-      // No pages, use personal profile
+      // No pages available or no page selected, use personal profile
       const existingAccount = await SocialMediaAccount.findOne({
         userId: userId,
         platform: 'facebook',
@@ -177,7 +207,7 @@ router.get("/user/:sessionId", authenticateUser, async (req, res) => {
         existingAccount.accountName = user.name;
         existingAccount.accessToken = accessToken;
         existingAccount.lastUsed = new Date();
-        await existingAccount.save();
+        savedAccount = await existingAccount.save();
       } else {
         // Create new account
         const socialAccount = new SocialMediaAccount({
@@ -188,7 +218,7 @@ router.get("/user/:sessionId", authenticateUser, async (req, res) => {
           accessToken: accessToken,
           isActive: true
         });
-        await socialAccount.save();
+        savedAccount = await socialAccount.save();
       }
     }
 
@@ -196,19 +226,35 @@ router.get("/user/:sessionId", authenticateUser, async (req, res) => {
     const userData = {
       platform: "facebook",
       user: user,
-      pages: pages,
-      accessToken: accessToken,
+      pages: pages || [],
+      accessToken: selectedAccessToken,
+      selectedPageId: pageId || user.id,
+      selectedPage: selectedPageData,
+      savedAccount: {
+        id: savedAccount._id,
+        accountName: savedAccount.accountName,
+        accountId: savedAccount.accountId,
+        platform: savedAccount.platform
+      },
       timestamp: tokens.timestamp,
     };
 
+    // Clean up session
     tokenUtils.removeTokens(sessionId);
     res.json(userData);
 
   } catch (error) {
     console.error('Error saving Facebook account:', error);
+    
+    // Clean up session on error
     tokenUtils.removeTokens(sessionId);
-    res.status(500).json({ error: 'Failed to save Facebook account' });
+    
+    // Send more detailed error information
+    res.status(500).json({ 
+      error: 'Failed to save Facebook account',
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
-
 module.exports = router;
